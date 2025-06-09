@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
 const OpenAI = require('openai');
-const fetchLatestEmails = require('./fetchEmails');
+const { fetchEmails, getThread } = require('./fetchEmails');
 const { getThread } = require('./fetchEmails');
 
 const app = express();
