@@ -109,4 +109,7 @@ const fetchEmails = async () => {
   }
 };
 
-module.exports = fetchEmails;
+module.exports = {
+  fetchEmails,
+  getThread
+};
