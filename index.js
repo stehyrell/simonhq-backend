@@ -1,91 +1,90 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const bodyParser = require('body-parser');
-const { Configuration, OpenAIApi } = require('openai');
-
-require('dotenv').config();
-const fetchEmails = require('./fetchEmails');
+const { google } = require('googleapis');
+const OpenAI = require('openai');
+const fetchLatestEmails = require('./fetchEmails');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-let emailCache = [];
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.GMAIL_CLIENT_ID,
+  process.env.GMAIL_CLIENT_SECRET
+);
+oAuth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 
-const loadEmailCache = () => {
-  try {
-    const data = fs.readFileSync(path.join(__dirname, 'email-cache.json'), 'utf8');
-    emailCache = JSON.parse(data);
-  } catch {
-    emailCache = [];
-  }
-};
+const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const saveEmailCache = () => {
-  fs.writeFileSync(path.join(__dirname, 'email-cache.json'), JSON.stringify(emailCache, null, 2));
-};
+// 🔁 Uppdatera cache automatiskt vid start
+fetchLatestEmails().catch(console.error);
 
+// GET /api/email/latest
 app.get('/api/email/latest', async (req, res) => {
-  await fetchEmails();
-  loadEmailCache();
-  res.json(emailCache);
+  try {
+    const filePath = path.join(__dirname, 'email-cache.json');
+    if (!fs.existsSync(filePath)) return res.json([]);
+    const cache = JSON.parse(fs.readFileSync(filePath));
+    res.json(cache);
+  } catch (err) {
+    console.error('❌ Fel vid hämtning av mailcache:', err);
+    res.status(500).json({ error: 'Kunde inte hämta mail' });
+  }
 });
 
+// POST /api/email/reply
 app.post('/api/email/reply', async (req, res) => {
+  const { to, subject, bodyPrompt } = req.body;
   try {
-    loadEmailCache();
-    const instruction = req.body.instruction || 'Svara vänligt.';
-    const email = emailCache.find((mail) => !mail.isReplied);
+    const instruction = bodyPrompt || 'Svara vänligt och be om möte.';
+    const prompt = `Skriv ett svar till ett mail från ${to} med ämnet \"${subject}\". ${instruction}`;
 
-    if (!email) return res.status(404).json({ error: 'Inget obemött mail hittades.' });
-
-    const configuration = new Configuration({ apiKey: process.env.OPENAI_API_KEY });
-    const openai = new OpenAIApi(configuration);
-
-    const completion = await openai.createChatCompletion({
-      model: 'gpt-4',
-      messages: [
-        {
-          role: 'system',
-          content: `Du är en professionell kommunikatör. Skriv ett artigt, välformulerat svar på följande mail, enligt instruktionen: "${instruction}"`,
-        },
-        {
-          role: 'user',
-          content: `Från: ${email.from.name} <${email.from.email}>\nÄmne: ${email.subject}\n\n${email.body}`,
-        },
-      ],
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
     });
 
-    const reply = completion.data.choices[0].message.content;
+    const generatedBody = completion.choices[0].message.content.trim();
+    res.json({ to, subject, body: generatedBody });
+  } catch (err) {
+    console.error('❌ Svarsgenerering misslyckades:', err);
+    res.status(500).json({ error: 'Kunde inte generera svar' });
+  }
+});
 
-    // ✅ Markera som besvarat
-    email.isReplied = true;
-    saveEmailCache();
+// POST /api/email/send-reply
+app.post('/api/email/send-reply', async (req, res) => {
+  const { to, subject, body } = req.body;
 
-    // 🧠 Spara i historik
-    const history = fs.existsSync('email-history.json')
-      ? JSON.parse(fs.readFileSync('email-history.json', 'utf8'))
-      : [];
-    history.push({
-      id: email.id,
-      to: email.from.email,
-      subject: `Svar på: ${email.subject}`,
-      body: reply,
-      repliedAt: new Date().toISOString(),
-      instruction,
+  try {
+    const messageParts = [
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      body,
+    ];
+
+    const rawMessage = Buffer.from(messageParts.join('\n')).toString('base64');
+
+    await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: { raw: rawMessage },
     });
-    fs.writeFileSync('email-history.json', JSON.stringify(history, null, 2));
 
-    res.json({ reply });
-  } catch (error) {
-    console.error('❌ Reply error:', error);
-    res.status(500).json({ error: 'Kunde inte generera eller spara svar.' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Fel vid skickande av mail:', err);
+    res.status(500).json({ error: 'Mail kunde inte skickas' });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ Servern är igång på port ${PORT}`);
+  console.log(`✅ Simon HQ backend is live on port ${PORT}`);
 });
