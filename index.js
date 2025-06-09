@@ -6,7 +6,6 @@ const path = require('path');
 const { google } = require('googleapis');
 const OpenAI = require('openai');
 const { fetchEmails, getThread } = require('./fetchEmails');
-const { getThread } = require('./fetchEmails');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
