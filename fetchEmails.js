@@ -25,7 +25,7 @@ const fetchEmails = async () => {
 
     if (!inbox.data.messages || inbox.data.messages.length === 0) {
       console.log('📭 Inga nya mail hittades.');
-      return;
+      return [];
     }
 
     const emailData = await Promise.all(
@@ -44,22 +44,23 @@ const fetchEmails = async () => {
         const fromName = matchFrom ? matchFrom[1].trim() : fromHeader;
         const fromEmail = matchFrom ? matchFrom[2].trim() : fromHeader;
 
-        // Hämta rätt MIME-part (text/plain)
-        const getPlainText = (payload) => {
-          if (payload.mimeType === 'text/plain' && payload.body?.data) {
-            return payload.body.data;
-          }
-          if (payload.parts) {
-            for (const part of payload.parts) {
-              if (part.mimeType === 'text/plain' && part.body?.data) {
-                return part.body.data;
-              }
+        // Hämta text/plain först, annars fallback till text/html
+        const getEmailBody = (payload) => {
+          const parts = payload.parts || [];
+          for (const part of parts) {
+            if (part.mimeType === 'text/plain' && part.body?.data) {
+              return part.body.data;
             }
           }
-          return '';
+          for (const part of parts) {
+            if (part.mimeType === 'text/html' && part.body?.data) {
+              return part.body.data;
+            }
+          }
+          return payload.body?.data || '';
         };
 
-        const encodedBody = getPlainText(msgData.data.payload);
+        const encodedBody = getEmailBody(msgData.data.payload);
         let decodedBody = '';
         try {
           decodedBody = Buffer.from(encodedBody, 'base64').toString('utf8');
@@ -67,7 +68,7 @@ const fetchEmails = async () => {
           console.warn('⚠️ Kunde inte dekoda body:', err.message);
         }
 
-        return {
+        const email = {
           id: uuidv4(),
           from: { name: fromName, email: fromEmail },
           to: toHeader,
@@ -76,10 +77,14 @@ const fetchEmails = async () => {
           receivedAt: new Date(Number(msgData.data.internalDate)).toISOString(),
           isReplied: false
         };
+
+        console.log(`📨 HÄMTAT: ${subject}`);
+        console.log(`BODY: ${decodedBody.substring(0, 100)}...`);
+
+        return email;
       })
     );
 
-    // Filtrera bort de som inte är till simon@yran.se
     const relevant = emailData.filter(mail =>
       mail.to?.toLowerCase().includes('simon@yran.se')
     );
@@ -90,6 +95,7 @@ const fetchEmails = async () => {
     );
 
     console.log(`✅ Sparat ${relevant.length} relevanta mail till cache`);
+    return relevant;
   } catch (error) {
     console.error('❌ FEL VID FETCH AV MAIL:', {
       message: error.message,
