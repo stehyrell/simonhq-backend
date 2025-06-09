@@ -28,6 +28,25 @@ const fetchEmails = async () => {
       return [];
     }
 
+    const extractBodyRecursive = (payload) => {
+      if (!payload) return '';
+
+      // Direkt body på detta lager
+      if (payload.body?.data && (payload.mimeType === 'text/plain' || payload.mimeType === 'text/html')) {
+        return payload.body.data;
+      }
+
+      // Dyk ner i delar
+      if (payload.parts && Array.isArray(payload.parts)) {
+        for (const part of payload.parts) {
+          const result = extractBodyRecursive(part);
+          if (result) return result;
+        }
+      }
+
+      return '';
+    };
+
     const emailData = await Promise.all(
       inbox.data.messages.map(async (msg) => {
         const msgData = await gmail.users.messages.get({
@@ -44,28 +63,12 @@ const fetchEmails = async () => {
         const fromName = matchFrom ? matchFrom[1].trim() : fromHeader;
         const fromEmail = matchFrom ? matchFrom[2].trim() : fromHeader;
 
-        // Hämta text/plain först, annars fallback till text/html
-        const getEmailBody = (payload) => {
-          const parts = payload.parts || [];
-          for (const part of parts) {
-            if (part.mimeType === 'text/plain' && part.body?.data) {
-              return part.body.data;
-            }
-          }
-          for (const part of parts) {
-            if (part.mimeType === 'text/html' && part.body?.data) {
-              return part.body.data;
-            }
-          }
-          return payload.body?.data || '';
-        };
-
-        const encodedBody = getEmailBody(msgData.data.payload);
+        const encodedBody = extractBodyRecursive(msgData.data.payload);
         let decodedBody = '';
         try {
           decodedBody = Buffer.from(encodedBody, 'base64').toString('utf8');
         } catch (err) {
-          console.warn('⚠️ Kunde inte dekoda body:', err.message);
+          console.warn(`⚠️ Kunde inte dekoda body för mail "${subject}":`, err.message);
         }
 
         const email = {
@@ -78,8 +81,8 @@ const fetchEmails = async () => {
           isReplied: false
         };
 
-        console.log(`📨 HÄMTAT: ${subject}`);
-        console.log(`BODY: ${decodedBody.substring(0, 100)}...`);
+        console.log(`📨 ${subject}`);
+        console.log(`BODY PREVIEW: ${decodedBody.slice(0, 80).replace(/\s+/g, ' ')}...`);
 
         return email;
       })
