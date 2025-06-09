@@ -25,7 +25,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // 🔁 Uppdatera cache automatiskt vid start
 fetchLatestEmails().catch(console.error);
 
-// GET /api/email/latest
+// ✅ GET /api/email/latest – Läs från cache
 app.get('/api/email/latest', async (req, res) => {
   try {
     const filePath = path.join(__dirname, 'email-cache.json');
@@ -38,12 +38,23 @@ app.get('/api/email/latest', async (req, res) => {
   }
 });
 
-// POST /api/email/reply
+// ✅ GET /emails – Hämta direkt från Gmail (för debug och test)
+app.get('/emails', async (req, res) => {
+  try {
+    const emails = await fetchLatestEmails();
+    res.json(emails);
+  } catch (err) {
+    console.error('❌ Fel i /emails:', err);
+    res.status(500).json({ error: 'Kunde inte hämta mail direkt från Gmail' });
+  }
+});
+
+// 🧠 POST /api/email/reply – Generera svarsutkast med OpenAI
 app.post('/api/email/reply', async (req, res) => {
   const { to, subject, bodyPrompt } = req.body;
   try {
     const instruction = bodyPrompt || 'Svara vänligt och be om möte.';
-    const prompt = `Skriv ett svar till ett mail från ${to} med ämnet \"${subject}\". ${instruction}`;
+    const prompt = `Skriv ett svar till ett mail från ${to} med ämnet "${subject}". ${instruction}`;
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -58,7 +69,7 @@ app.post('/api/email/reply', async (req, res) => {
   }
 });
 
-// POST /api/email/send-reply
+// 📤 POST /api/email/send-reply – Skicka svar via Gmail API
 app.post('/api/email/send-reply', async (req, res) => {
   const { to, subject, body } = req.body;
 
