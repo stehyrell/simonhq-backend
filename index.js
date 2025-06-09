@@ -79,7 +79,7 @@ app.get('/api/email/latest', async (req, res) => {
     );
 
     const filtered = emailData.filter(Boolean);
-    res.json({ emails: filtered.slice(0, 1) });
+    res.json({ emails: filtered });
   } catch (error) {
     console.error('🔴 FULL ERROR:', {
       message: error.message,
