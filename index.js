@@ -1,22 +1,20 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const { google } = require('googleapis');
 const { v4: uuidv4 } = require('uuid');
 const OpenAI = require('openai');
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-// --- OPENAI INIT ---
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// --- GMAIL AUTH ---
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET
@@ -25,7 +23,12 @@ oAuth2Client.setCredentials({
   refresh_token: process.env.GMAIL_REFRESH_TOKEN
 });
 
-// --- HÄMTA SENASTE MAIL TILL simon@yran.se ---
+const SENT_FILE = './sentEmails.json';
+
+// Skapa historikfil om den inte finns
+if (!fs.existsSync(SENT_FILE)) fs.writeFileSync(SENT_FILE, '[]');
+
+// ✅ Hämta senaste mail – nu som array + HTML fallback
 app.get('/api/email/latest', async (req, res) => {
   try {
     const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
@@ -33,154 +36,106 @@ app.get('/api/email/latest', async (req, res) => {
     const inbox = await gmail.users.messages.list({
       userId: 'me',
       labelIds: ['INBOX'],
-      maxResults: 5
+      maxResults: 1
     });
 
-    const relevantMessages = inbox.data.messages || [];
+    const message = inbox.data.messages?.[0];
+    if (!message) return res.json([]);
 
-    const emailData = await Promise.all(
-      relevantMessages.map(async (msg) => {
-        const detail = await gmail.users.messages.get({
-          userId: 'me',
-          id: msg.id
-        });
-
-        const headers = detail.data.payload.headers;
-        const toHeader = headers.find(h => h.name === 'To')?.value || '';
-        if (!toHeader.includes('simon@yran.se')) return null;
-
-        const subject = headers.find(h => h.name === 'Subject')?.value || '';
-        const fromHeader = headers.find(h => h.name === 'From')?.value || '';
-        const match = fromHeader.match(/(.*) <(.*)>/);
-        const fromName = match ? match[1].trim() : fromHeader;
-        const fromEmail = match ? match[2].trim() : fromHeader;
-
-        let body = '';
-        const parts = detail.data.payload.parts || [];
-        const textPart = parts.find(p => p.mimeType === 'text/plain');
-        const htmlPart = parts.find(p => p.mimeType === 'text/html');
-
-        if (textPart?.body?.data) {
-          body = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
-        } else if (htmlPart?.body?.data) {
-          const rawHtml = Buffer.from(htmlPart.body.data, 'base64').toString('utf-8');
-          body = rawHtml.replace(/<\/?[^>]+(>|$)/g, '').replace(/\s+/g, ' ').trim();
-        }
-
-        return {
-          id: uuidv4(),
-          from: { name: fromName, email: fromEmail },
-          subject,
-          body,
-          receivedAt: new Date(Number(detail.data.internalDate)).toISOString(),
-          isReplied: false
-        };
-      })
-    );
-
-    const filtered = emailData.filter(Boolean);
-    res.json({ emails: filtered });
-  } catch (error) {
-    console.error('🔴 FULL ERROR:', {
-      message: error.message,
-      stack: error.stack,
-      response: error.response?.data,
+    const detail = await gmail.users.messages.get({
+      userId: 'me',
+      id: message.id
     });
-    res.status(500).json({ error: 'Fetching email failed' });
+
+    const headers = detail.data.payload.headers;
+    const subject = headers.find(h => h.name === 'Subject')?.value || '';
+    const fromHeader = headers.find(h => h.name === 'From')?.value || '';
+    const match = fromHeader.match(/(.*) <(.*)>/);
+    const fromName = match ? match[1].trim() : fromHeader;
+    const fromEmail = match ? match[2].trim() : fromHeader;
+
+    const bodyPart = detail.data.payload.parts?.find(p => p.mimeType === 'text/plain') ||
+                     detail.data.payload.parts?.find(p => p.mimeType === 'text/html') ||
+                     detail.data.payload;
+
+    const body = Buffer.from(bodyPart?.body?.data || '', 'base64').toString('utf-8');
+
+    const sentHistory = JSON.parse(fs.readFileSync(SENT_FILE));
+    const isReplied = sentHistory.some(e => e.gmailId === message.id);
+
+    res.json([{
+      id: uuidv4(),
+      gmailId: message.id,
+      from: { name: fromName, email: fromEmail },
+      subject,
+      body,
+      receivedAt: new Date(Number(detail.data.internalDate)).toISOString(),
+      isReplied
+    }]);
+  } catch (err) {
+    console.error('🔴 Error fetching email:', err);
+    res.status(500).json({ error: 'Failed to fetch latest email' });
   }
 });
 
-// --- GENERERA SVAR PÅ MAIL SOM UTKAST ---
+// ✉️ Skicka svar + spara i historik
 app.post('/api/email/reply', async (req, res) => {
-  const { to, subject, bodyPrompt } = req.body;
+  const { to, subject, body, gmailId } = req.body;
+  if (process.env.SILENT_MODE === 'true') return res.json({ silent: true });
 
   try {
-    const prompt = `Skriv ett professionellt, personligt och relevant mailsvar på svenska till: ${to}. Ämne: "${subject}". Instruktion: ${bodyPrompt}`;
+    const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [{ role: "user", content: prompt }]
+    const messageParts = [
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      body
+    ];
+    const message = Buffer.from(messageParts.join('\n')).toString('base64');
+
+    await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: { raw: message }
     });
 
-    const reply = completion.choices[0].message.content.trim();
+    const logEntry = {
+      id: uuidv4(),
+      gmailId,
+      to,
+      subject,
+      body,
+      sentAt: new Date().toISOString()
+    };
+    const existing = JSON.parse(fs.readFileSync(SENT_FILE));
+    existing.push(logEntry);
+    fs.writeFileSync(SENT_FILE, JSON.stringify(existing, null, 2));
 
-    res.json({
-      draft: {
-        to,
-        subject,
-        body: reply
-      }
-    });
+    res.json({ success: true });
   } catch (err) {
-    console.error('Failed to generate reply:', err);
-    res.status(500).json({ error: "Reply draft failed" });
+    console.error('🔴 Error sending email:', err);
+    res.status(500).json({ error: 'Failed to send reply' });
   }
 });
 
-// --- MOCK: PARTNERSEARCH ---
-app.post('/api/partner/search', (req, res) => {
-  const { category, location } = req.body;
-  const mockCompanies = [
-    {
-      id: "redbull-123",
-      name: "Red Bull Sweden",
-      description: "Energy drinks and extreme sports",
-      category,
-      location
-    },
-    {
-      id: "monster-456",
-      name: "Monster Energy",
-      description: "Edgy energy drink for festivals",
-      category,
-      location
-    }
-  ];
-  res.json({ companies: mockCompanies });
-});
-
-// --- MOCK: COMPANY DETAILS ---
-app.get('/api/partner/company/:id', (req, res) => {
-  const { id } = req.params;
-  const companyDetails = {
-    id,
-    name: id === "redbull-123" ? "Red Bull Sweden" : "Monster Energy",
-    industry: "Beverages",
-    description: "High-energy drinks for active lifestyles.",
-    website: "https://example.com",
-    contacts: [
-      {
-        name: "Anna Eriksson",
-        title: "Marketing Director",
-        email: "anna@example.com",
-        linkedin: "https://linkedin.com/in/anna"
-      }
-    ]
-  };
-  res.json(companyDetails);
-});
-
-// --- OPENAI EMAILDRAFT MOCK ---
-app.post('/api/partner/email-draft', async (req, res) => {
-  const { companyId, angle } = req.body;
+// 🧠 Skapa reply-mail med GPT baserat på instruktion
+app.post('/api/email/draft', async (req, res) => {
+  const { subject, body, instruction } = req.body;
   try {
-    const prompt = `Skriv ett professionellt men personligt pitchmail på svenska till ett företag (${companyId}) som handlar om: ${angle}`;
-    const completion = await openai.chat.completions.create({
+    const prompt = `Svara på följande mail på svenska utifrån instruktionen: "${instruction}".\n\nÄmne: ${subject}\n\nInnehåll:\n${body}`;
+    const reply = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [{ role: "user", content: prompt }]
     });
-
-    res.json({
-      subject: `Förslag på samarbete med ${companyId}`,
-      body: completion.choices[0].message.content.trim()
-    });
+    res.json({ reply: reply.choices[0].message.content.trim() });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Email draft generation failed" });
+    console.error('🔴 Error drafting reply:', err);
+    res.status(500).json({ error: 'Failed to generate reply' });
   }
 });
 
-// --- STARTA SERVER ---
+// 🟢 Server igång
 app.listen(PORT, () => {
-  console.log(`✅ Simon HQ backend is live on port ${PORT}`);
+  console.log(`✅ Simon HQ backend live på port ${PORT}`);
 });
