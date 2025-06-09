@@ -30,18 +30,15 @@ const fetchEmails = async () => {
 
     const extractBodyRecursive = (payload) => {
       if (!payload) return '';
-
       if (payload.body?.data && (payload.mimeType === 'text/plain' || payload.mimeType === 'text/html')) {
         return payload.body.data;
       }
-
       if (payload.parts && Array.isArray(payload.parts)) {
         for (const part of payload.parts) {
           const result = extractBodyRecursive(part);
           if (result) return result;
         }
       }
-
       return '';
     };
 
@@ -71,6 +68,7 @@ const fetchEmails = async () => {
 
         const email = {
           id: uuidv4(),
+          threadId: msgData.data.threadId, // 🔥 NYTT
           from: { name: fromName, email: fromEmail },
           to: toHeader,
           subject,
@@ -84,7 +82,6 @@ const fetchEmails = async () => {
       })
     );
 
-    // ⛔️ Tidigare filtrering borttagen: inga mail ska uteslutas
     fs.writeFileSync(
       path.join(__dirname, 'email-cache.json'),
       JSON.stringify(emailData, null, 2)

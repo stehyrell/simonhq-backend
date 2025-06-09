@@ -22,10 +22,10 @@ oAuth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// 🔁 Uppdatera cache automatiskt vid start
+// 🔁 Uppdatera mailcache vid uppstart
 fetchLatestEmails().catch(console.error);
 
-// ✅ GET /api/email/latest – Läs från cache
+// ✅ GET /api/email/latest – från cache
 app.get('/api/email/latest', async (req, res) => {
   try {
     const filePath = path.join(__dirname, 'email-cache.json');
@@ -38,18 +38,68 @@ app.get('/api/email/latest', async (req, res) => {
   }
 });
 
-// ✅ GET /emails – Hämta direkt från Gmail (för debug och test)
+// ✅ GET /emails – direkt från Gmail
 app.get('/emails', async (req, res) => {
   try {
     const emails = await fetchLatestEmails();
     res.json(emails);
   } catch (err) {
     console.error('❌ Fel i /emails:', err);
-    res.status(500).json({ error: 'Kunde inte hämta mail direkt från Gmail' });
+    res.status(500).json({ error: 'Kunde inte hämta mail direkt' });
   }
 });
 
-// 🧠 POST /api/email/reply – Generera svarsutkast med OpenAI
+// ✅ GET /threads/:id – hämta hela tråden
+app.get('/threads/:id', async (req, res) => {
+  const threadId = req.params.id;
+  if (!threadId) return res.status(400).json({ error: 'threadId saknas' });
+
+  try {
+    const thread = await gmail.users.threads.get({
+      userId: 'me',
+      id: threadId,
+      format: 'full'
+    });
+
+    const messages = thread.data.messages.map(msg => {
+      const headers = msg.payload.headers;
+      const subject = headers.find(h => h.name === 'Subject')?.value || '';
+      const from = headers.find(h => h.name === 'From')?.value || '';
+      const to = headers.find(h => h.name === 'To')?.value || '';
+      const date = headers.find(h => h.name === 'Date')?.value || '';
+
+      const extractBodyRecursive = (payload) => {
+        if (payload.body?.data && (payload.mimeType === 'text/plain' || payload.mimeType === 'text/html')) {
+          return payload.body.data;
+        }
+        if (payload.parts) {
+          for (const part of payload.parts) {
+            const result = extractBodyRecursive(part);
+            if (result) return result;
+          }
+        }
+        return '';
+      };
+
+      const encodedBody = extractBodyRecursive(msg.payload);
+      let decodedBody = '';
+      try {
+        decodedBody = Buffer.from(encodedBody, 'base64').toString('utf8');
+      } catch (err) {
+        decodedBody = '[Kunde inte dekoda body]';
+      }
+
+      return { from, to, date, subject, body: decodedBody };
+    });
+
+    res.json(messages);
+  } catch (error) {
+    console.error('❌ Fel i /threads/:id:', error);
+    res.status(500).json({ error: 'Kunde inte hämta tråd' });
+  }
+});
+
+// ✅ POST /api/email/reply – generera svarsutkast
 app.post('/api/email/reply', async (req, res) => {
   const { to, subject, bodyPrompt } = req.body;
   try {
@@ -69,7 +119,7 @@ app.post('/api/email/reply', async (req, res) => {
   }
 });
 
-// 📤 POST /api/email/send-reply – Skicka svar via Gmail API
+// ✅ POST /api/email/send-reply – skicka svar
 app.post('/api/email/send-reply', async (req, res) => {
   const { to, subject, body } = req.body;
 
