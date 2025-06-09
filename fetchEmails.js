@@ -31,12 +31,10 @@ const fetchEmails = async () => {
     const extractBodyRecursive = (payload) => {
       if (!payload) return '';
 
-      // Direkt body på detta lager
       if (payload.body?.data && (payload.mimeType === 'text/plain' || payload.mimeType === 'text/html')) {
         return payload.body.data;
       }
 
-      // Dyk ner i delar
       if (payload.parts && Array.isArray(payload.parts)) {
         for (const part of payload.parts) {
           const result = extractBodyRecursive(part);
@@ -81,24 +79,19 @@ const fetchEmails = async () => {
           isReplied: false
         };
 
-        console.log(`📨 ${subject}`);
-        console.log(`BODY PREVIEW: ${decodedBody.slice(0, 80).replace(/\s+/g, ' ')}...`);
-
+        console.log(`📨 ${subject} | BODY length: ${decodedBody.length}`);
         return email;
       })
     );
 
-    const relevant = emailData.filter(mail =>
-      mail.to?.toLowerCase().includes('simon@yran.se')
-    );
-
+    // ⛔️ Tidigare filtrering borttagen: inga mail ska uteslutas
     fs.writeFileSync(
       path.join(__dirname, 'email-cache.json'),
-      JSON.stringify(relevant, null, 2)
+      JSON.stringify(emailData, null, 2)
     );
 
-    console.log(`✅ Sparat ${relevant.length} relevanta mail till cache`);
-    return relevant;
+    console.log(`✅ Sparat ${emailData.length} mail till cache`);
+    return emailData;
   } catch (error) {
     console.error('❌ FEL VID FETCH AV MAIL:', {
       message: error.message,
