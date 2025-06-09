@@ -23,7 +23,7 @@ app.get('/', (req, res) => {
 
 app.get('/emails', async (req, res) => {
   try {
-    const emails = await fetchLatestEmails();
+    const emails = await fetchEmails();
     res.json(emails);
   } catch (error) {
     console.error('Fel vid hämtning av e-post:', error);
