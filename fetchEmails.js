@@ -1,15 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
-const { v4: uuidv4 } = require('uuid');
-const { decode } = require('html-entities');
-
 require('dotenv').config();
 
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET
 );
+
 oAuth2Client.setCredentials({
   refresh_token: process.env.GMAIL_REFRESH_TOKEN
 });
@@ -21,7 +19,7 @@ const fetchEmails = async () => {
     const inbox = await gmail.users.messages.list({
       userId: 'me',
       labelIds: ['INBOX'],
-      maxResults: 15
+      maxResults: 10,
     });
 
     if (!inbox.data.messages || inbox.data.messages.length === 0) {
@@ -29,68 +27,62 @@ const fetchEmails = async () => {
       return [];
     }
 
-    const extractBodyRecursive = (payload) => {
-      if (!payload) return '';
-      if (payload.body?.data && (payload.mimeType === 'text/plain' || payload.mimeType === 'text/html')) {
-        return payload.body.data;
-      }
-      if (payload.parts && Array.isArray(payload.parts)) {
-        for (const part of payload.parts) {
-          const result = extractBodyRecursive(part);
-          if (result) return result;
-        }
-      }
-      return '';
-    };
-
     const emailData = await Promise.all(
       inbox.data.messages.map(async (msg) => {
         const msgData = await gmail.users.messages.get({
           userId: 'me',
           id: msg.id,
-          format: 'full'
+          format: 'full',
         });
 
         const headers = msgData.data.payload.headers;
         const subject = headers.find(h => h.name === 'Subject')?.value || '';
         const fromHeader = headers.find(h => h.name === 'From')?.value || '';
         const toHeader = headers.find(h => h.name === 'To')?.value || '';
+        const threadId = msgData.data.threadId;
+
         const matchFrom = fromHeader.match(/(.*) <(.*)>/);
         const fromName = matchFrom ? matchFrom[1].trim() : fromHeader;
         const fromEmail = matchFrom ? matchFrom[2].trim() : fromHeader;
 
-        const encodedBody = extractBodyRecursive(msgData.data.payload);
+        const getPlainText = (payload) => {
+          if (payload.mimeType === 'text/plain' && payload.body?.data) {
+            return payload.body.data;
+          }
+          if (payload.parts) {
+            for (const part of payload.parts) {
+              if (part.mimeType === 'text/plain' && part.body?.data) {
+                return part.body.data;
+              }
+            }
+          }
+          return '';
+        };
+
+        const encodedBody = getPlainText(msgData.data.payload);
         let decodedBody = '';
         try {
-          decodedBody = decode(Buffer.from(encodedBody, 'base64').toString('utf8'));
+          decodedBody = Buffer.from(encodedBody, 'base64').toString('utf8');
         } catch (err) {
-          console.warn(`⚠️ Kunde inte dekoda body för mail "${subject}":`, err.message);
+          console.warn('⚠️ Kunde inte dekoda body:', err.message);
         }
 
-        const bodyType = decodedBody.includes('<html') || decodedBody.includes('<div') || decodedBody.includes('<p') ? 'html' : 'text';
-
-        const email = {
-          id: uuidv4(),
-          threadId: msgData.data.threadId,
+        return {
+          id: msg.id,
+          threadId,
           from: { name: fromName, email: fromEmail },
           to: toHeader,
           subject,
           body: decodedBody,
-          bodyType,
           receivedAt: new Date(Number(msgData.data.internalDate)).toISOString(),
-          isReplied: false
+          isReplied: false,
         };
-
-        if (toHeader.toLowerCase().includes('simon@yran.se')) {
-          console.log(`📨 ${subject} | BODY(${bodyType}) length: ${decodedBody.length}`);
-          return email;
-        } else {
-          return null;
-        }
       })
     );
 
-    const filtered = emailData.filter(e => e !== null);
+    const filtered = emailData.filter(mail =>
+      mail.to?.toLowerCase().includes('simon@yran.se')
+    );
 
     fs.writeFileSync(
       path.join(__dirname, 'email-cache.json'),
@@ -103,13 +95,74 @@ const fetchEmails = async () => {
     console.error('❌ FEL VID FETCH AV MAIL:', {
       message: error.message,
       stack: error.stack,
-      response: error.response?.data
+      response: error.response?.data,
     });
     throw error;
   }
 };
 
+async function getThread(threadId) {
+  const threadMessages = [];
+  try {
+    const threadResponse = await gmail.users.messages.list({
+      userId: 'me',
+      q: `rfc822msgid:${threadId} OR threadId:${threadId}`,
+    });
+
+    const messages = threadResponse.data.messages || [];
+
+    for (const msg of messages) {
+      const msgData = await gmail.users.messages.get({
+        userId: 'me',
+        id: msg.id,
+        format: 'full',
+      });
+
+      const headers = msgData.data.payload.headers;
+      const from = headers.find(h => h.name === 'From')?.value || '';
+      const to = headers.find(h => h.name === 'To')?.value || '';
+      const subject = headers.find(h => h.name === 'Subject')?.value || '';
+      const date = headers.find(h => h.name === 'Date')?.value || '';
+
+      const getPlainText = (payload) => {
+        if (payload.mimeType === 'text/plain' && payload.body?.data) {
+          return payload.body.data;
+        }
+        if (payload.parts) {
+          for (const part of payload.parts) {
+            if (part.mimeType === 'text/plain' && part.body?.data) {
+              return part.body.data;
+            }
+          }
+        }
+        return '';
+      };
+
+      const encodedBody = getPlainText(msgData.data.payload);
+      let decodedBody = '';
+      try {
+        decodedBody = Buffer.from(encodedBody, 'base64').toString('utf8');
+      } catch (err) {
+        decodedBody = '';
+      }
+
+      threadMessages.push({
+        from,
+        to,
+        subject,
+        date,
+        body: decodedBody,
+      });
+    }
+
+    return threadMessages;
+  } catch (err) {
+    console.error('❌ FEL I getThread:', err.message);
+    return [];
+  }
+}
+
 module.exports = {
   fetchEmails,
-  getThread
+  getThread,
 };
