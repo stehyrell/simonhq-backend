@@ -1,102 +1,76 @@
-const fs = require('fs');
-const path = require('path');
 const { google } = require('googleapis');
-const { v4: uuidv4 } = require('uuid');
+const { decode } = require('html-entities');
 
-require('dotenv').config();
-
-const oAuth2Client = new google.auth.OAuth2(
+const gmail = google.gmail('v1');
+const AUTH = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET
 );
-oAuth2Client.setCredentials({
+AUTH.setCredentials({
   refresh_token: process.env.GMAIL_REFRESH_TOKEN
 });
 
-const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
-
-const fetchEmails = async () => {
+function decodeBody(payload) {
+  if (!payload) return '';
   try {
-    const inbox = await gmail.users.messages.list({
+    const decoded = Buffer.from(payload, 'base64').toString('utf-8');
+    return decode(decoded);
+  } catch {
+    return '';
+  }
+}
+
+function getHeader(headers, name) {
+  const header = headers.find((h) => h.name.toLowerCase() === name.toLowerCase());
+  return header ? header.value : '';
+}
+
+async function fetchEmails() {
+  const res = await gmail.users.messages.list({
+    userId: 'me',
+    maxResults: 20,
+    q: 'to:simon@yran.se',
+    auth: AUTH
+  });
+
+  const emails = [];
+
+  for (const msg of res.data.messages || []) {
+    const { data } = await gmail.users.messages.get({
       userId: 'me',
-      labelIds: ['INBOX'],
-      maxResults: 10
+      id: msg.id,
+      format: 'full',
+      auth: AUTH
     });
 
-    if (!inbox.data.messages || inbox.data.messages.length === 0) {
-      console.log('📭 Inga nya mail hittades.');
-      return [];
+    const headers = data.payload.headers;
+    const from = getHeader(headers, 'From');
+    const to = getHeader(headers, 'To');
+    const subject = getHeader(headers, 'Subject');
+    const date = getHeader(headers, 'Date');
+
+    let body = '';
+    const parts = data.payload.parts || [data.payload];
+    for (const part of parts) {
+      if (part.mimeType === 'text/html' && part.body.data) {
+        body = decodeBody(part.body.data);
+        break;
+      } else if (part.mimeType === 'text/plain' && part.body.data && !body) {
+        body = decodeBody(part.body.data);
+      }
     }
 
-    const extractBodyRecursive = (payload) => {
-      if (!payload) return '';
-      if (payload.body?.data && (payload.mimeType === 'text/plain' || payload.mimeType === 'text/html')) {
-        return payload.body.data;
-      }
-      if (payload.parts && Array.isArray(payload.parts)) {
-        for (const part of payload.parts) {
-          const result = extractBodyRecursive(part);
-          if (result) return result;
-        }
-      }
-      return '';
-    };
+    if (!body && data.payload.body?.data) {
+      body = decodeBody(data.payload.body.data);
+    }
 
-    const emailData = await Promise.all(
-      inbox.data.messages.map(async (msg) => {
-        const msgData = await gmail.users.messages.get({
-          userId: 'me',
-          id: msg.id,
-          format: 'full'
-        });
+    console.log(`📨 HÄMTAT: ${subject}`);
+    console.log(`BODY PREVIEW: ${body.substring(0, 120)}...`);
 
-        const headers = msgData.data.payload.headers;
-        const subject = headers.find(h => h.name === 'Subject')?.value || '';
-        const fromHeader = headers.find(h => h.name === 'From')?.value || '';
-        const toHeader = headers.find(h => h.name === 'To')?.value || '';
-        const matchFrom = fromHeader.match(/(.*) <(.*)>/);
-        const fromName = matchFrom ? matchFrom[1].trim() : fromHeader;
-        const fromEmail = matchFrom ? matchFrom[2].trim() : fromHeader;
-
-        const encodedBody = extractBodyRecursive(msgData.data.payload);
-        let decodedBody = '';
-        try {
-          decodedBody = Buffer.from(encodedBody, 'base64').toString('utf8');
-        } catch (err) {
-          console.warn(`⚠️ Kunde inte dekoda body för mail "${subject}":`, err.message);
-        }
-
-        const email = {
-          id: uuidv4(),
-          threadId: msgData.data.threadId, // 🔥 NYTT
-          from: { name: fromName, email: fromEmail },
-          to: toHeader,
-          subject,
-          body: decodedBody,
-          receivedAt: new Date(Number(msgData.data.internalDate)).toISOString(),
-          isReplied: false
-        };
-
-        console.log(`📨 ${subject} | BODY length: ${decodedBody.length}`);
-        return email;
-      })
-    );
-
-    fs.writeFileSync(
-      path.join(__dirname, 'email-cache.json'),
-      JSON.stringify(emailData, null, 2)
-    );
-
-    console.log(`✅ Sparat ${emailData.length} mail till cache`);
-    return emailData;
-  } catch (error) {
-    console.error('❌ FEL VID FETCH AV MAIL:', {
-      message: error.message,
-      stack: error.stack,
-      response: error.response?.data
-    });
-    throw error;
+    emails.push({ from, to, subject, date, body });
   }
-};
+
+  return emails;
+}
 
 module.exports = fetchEmails;
