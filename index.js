@@ -25,7 +25,7 @@ oAuth2Client.setCredentials({
   refresh_token: process.env.GMAIL_REFRESH_TOKEN
 });
 
-// --- EMAIL: SENASTE MEDDELANDE ---
+// --- HÄMTA SENASTE MAIL TILL simon@yran.se ---
 app.get('/api/email/latest', async (req, res) => {
   try {
     const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
@@ -33,38 +33,53 @@ app.get('/api/email/latest', async (req, res) => {
     const inbox = await gmail.users.messages.list({
       userId: 'me',
       labelIds: ['INBOX'],
-      maxResults: 1
+      maxResults: 5
     });
 
-    const message = inbox.data.messages?.[0];
-    if (!message) {
-      return res.status(404).json({ error: 'No emails found' });
-    }
+    const relevantMessages = inbox.data.messages || [];
 
-    const detail = await gmail.users.messages.get({
-      userId: 'me',
-      id: message.id
-    });
+    const emailData = await Promise.all(
+      relevantMessages.map(async (msg) => {
+        const detail = await gmail.users.messages.get({
+          userId: 'me',
+          id: msg.id
+        });
 
-    const headers = detail.data.payload.headers;
-    const subject = headers.find(h => h.name === 'Subject')?.value || '';
-    const fromHeader = headers.find(h => h.name === 'From')?.value || '';
-    const match = fromHeader.match(/(.*) <(.*)>/);
-    const fromName = match ? match[1].trim() : fromHeader;
-    const fromEmail = match ? match[2].trim() : fromHeader;
-    const body = Buffer.from(
-      detail.data.payload.parts?.find(p => p.mimeType === 'text/plain')?.body?.data || '',
-      'base64'
-    ).toString('utf-8');
+        const headers = detail.data.payload.headers;
+        const toHeader = headers.find(h => h.name === 'To')?.value || '';
+        if (!toHeader.includes('simon@yran.se')) return null;
 
-    res.json({
-      id: uuidv4(),
-      from: { name: fromName, email: fromEmail },
-      subject,
-      body,
-      receivedAt: new Date(Number(detail.data.internalDate)).toISOString(),
-      isReplied: false
-    });
+        const subject = headers.find(h => h.name === 'Subject')?.value || '';
+        const fromHeader = headers.find(h => h.name === 'From')?.value || '';
+        const match = fromHeader.match(/(.*) <(.*)>/);
+        const fromName = match ? match[1].trim() : fromHeader;
+        const fromEmail = match ? match[2].trim() : fromHeader;
+
+        let body = '';
+        const parts = detail.data.payload.parts || [];
+        const textPart = parts.find(p => p.mimeType === 'text/plain');
+        const htmlPart = parts.find(p => p.mimeType === 'text/html');
+
+        if (textPart?.body?.data) {
+          body = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
+        } else if (htmlPart?.body?.data) {
+          const rawHtml = Buffer.from(htmlPart.body.data, 'base64').toString('utf-8');
+          body = rawHtml.replace(/<\/?[^>]+(>|$)/g, '').replace(/\s+/g, ' ').trim();
+        }
+
+        return {
+          id: uuidv4(),
+          from: { name: fromName, email: fromEmail },
+          subject,
+          body,
+          receivedAt: new Date(Number(detail.data.internalDate)).toISOString(),
+          isReplied: false
+        };
+      })
+    );
+
+    const filtered = emailData.filter(Boolean);
+    res.json({ emails: filtered.slice(0, 1) });
   } catch (error) {
     console.error('🔴 FULL ERROR:', {
       message: error.message,
@@ -75,31 +90,30 @@ app.get('/api/email/latest', async (req, res) => {
   }
 });
 
-// --- SKICKA SVAR ---
-app.post('/api/email/send-reply', async (req, res) => {
-  const { to, subject, body } = req.body;
+// --- GENERERA SVAR PÅ MAIL SOM UTKAST ---
+app.post('/api/email/reply', async (req, res) => {
+  const { to, subject, bodyPrompt } = req.body;
 
   try {
-    const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+    const prompt = `Skriv ett professionellt, personligt och relevant mailsvar på svenska till: ${to}. Ämne: "${subject}". Instruktion: ${bodyPrompt}`;
 
-    const messageParts = [
-      `To: ${to}`,
-      `Subject: ${subject}`,
-      'Content-Type: text/plain; charset=utf-8',
-      '',
-      body
-    ];
-    const message = Buffer.from(messageParts.join('\n')).toString('base64');
-
-    await gmail.users.messages.send({
-      userId: 'me',
-      requestBody: { raw: message }
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [{ role: "user", content: prompt }]
     });
 
-    res.json({ success: true });
+    const reply = completion.choices[0].message.content.trim();
+
+    res.json({
+      draft: {
+        to,
+        subject,
+        body: reply
+      }
+    });
   } catch (err) {
-    console.error('Failed to send email:', err);
-    res.status(500).json({ error: 'Email sending failed' });
+    console.error('Failed to generate reply:', err);
+    res.status(500).json({ error: "Reply draft failed" });
   }
 });
 
@@ -146,7 +160,7 @@ app.get('/api/partner/company/:id', (req, res) => {
   res.json(companyDetails);
 });
 
-// --- OPENAI EMAILDRAFT ---
+// --- OPENAI EMAILDRAFT MOCK ---
 app.post('/api/partner/email-draft', async (req, res) => {
   const { companyId, angle } = req.body;
   try {
