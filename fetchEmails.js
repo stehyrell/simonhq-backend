@@ -1,82 +1,103 @@
-const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
+const { google } = require('googleapis');
+const { v4: uuidv4 } = require('uuid');
 
-const CREDENTIALS = {
-  client_id: process.env.GMAIL_CLIENT_ID,
-  client_secret: process.env.GMAIL_CLIENT_SECRET,
-  redirect_uris: ['https://developers.google.com/oauthplayground'],
-};
+require('dotenv').config();
 
-const TOKEN = {
-  refresh_token: process.env.GMAIL_REFRESH_TOKEN,
-  type: 'authorized_user',
-};
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.GMAIL_CLIENT_ID,
+  process.env.GMAIL_CLIENT_SECRET
+);
+oAuth2Client.setCredentials({
+  refresh_token: process.env.GMAIL_REFRESH_TOKEN
+});
 
-const isToSimonYran = (headers) => {
-  const toHeader = headers.find((h) => h.name.toLowerCase() === 'to');
-  return toHeader && toHeader.value.toLowerCase().includes('simon@yran.se');
-};
+const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
 
 const fetchEmails = async () => {
-  const oAuth2Client = new google.auth.OAuth2(
-    CREDENTIALS.client_id,
-    CREDENTIALS.client_secret,
-    CREDENTIALS.redirect_uris[0]
-  );
-  oAuth2Client.setCredentials(TOKEN);
-
-  const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
-  const res = await gmail.users.messages.list({
-    userId: 'me',
-    maxResults: 10,
-    q: 'in:inbox -category:promotions -category:social',
-  });
-
-  const messages = res.data.messages || [];
-  const allEmails = [];
-
-  for (const msg of messages) {
-    const msgData = await gmail.users.messages.get({
+  try {
+    const inbox = await gmail.users.messages.list({
       userId: 'me',
-      id: msg.id,
-      format: 'full',
+      labelIds: ['INBOX'],
+      maxResults: 10
     });
 
-    const headers = msgData.data.payload.headers;
-    if (!isToSimonYran(headers)) {
-      console.log(`⛔️ Skippat mail: ej till simon@yran.se`);
-      continue;
+    if (!inbox.data.messages || inbox.data.messages.length === 0) {
+      console.log('📭 Inga nya mail hittades.');
+      return;
     }
 
-    const fromHeader = headers.find((h) => h.name.toLowerCase() === 'from');
-    const subjectHeader = headers.find((h) => h.name.toLowerCase() === 'subject');
-    const toHeader = headers.find((h) => h.name.toLowerCase() === 'to');
-    const dateHeader = headers.find((h) => h.name.toLowerCase() === 'date');
+    const emailData = await Promise.all(
+      inbox.data.messages.map(async (msg) => {
+        const msgData = await gmail.users.messages.get({
+          userId: 'me',
+          id: msg.id,
+          format: 'full'
+        });
 
-    const body =
-      msgData.data.payload.parts?.[0]?.body?.data ||
-      msgData.data.payload.body?.data ||
-      '';
-    const decodedBody = Buffer.from(body, 'base64').toString('utf8');
+        const headers = msgData.data.payload.headers;
+        const subject = headers.find(h => h.name === 'Subject')?.value || '';
+        const fromHeader = headers.find(h => h.name === 'From')?.value || '';
+        const toHeader = headers.find(h => h.name === 'To')?.value || '';
+        const matchFrom = fromHeader.match(/(.*) <(.*)>/);
+        const fromName = matchFrom ? matchFrom[1].trim() : fromHeader;
+        const fromEmail = matchFrom ? matchFrom[2].trim() : fromHeader;
 
-    allEmails.push({
-      id: msg.id,
-      from: {
-        name: fromHeader?.value.split('<')[0].trim().replace(/"/g, ''),
-        email: fromHeader?.value.match(/<(.*)>/)?.[1] || '',
-      },
-      to: toHeader?.value || '',
-      subject: subjectHeader?.value || '(No Subject)',
-      body: decodedBody,
-      receivedAt: new Date(dateHeader?.value || Date.now()).toISOString(),
-      isReplied: false,
+        // Hämta rätt MIME-part (text/plain)
+        const getPlainText = (payload) => {
+          if (payload.mimeType === 'text/plain' && payload.body?.data) {
+            return payload.body.data;
+          }
+          if (payload.parts) {
+            for (const part of payload.parts) {
+              if (part.mimeType === 'text/plain' && part.body?.data) {
+                return part.body.data;
+              }
+            }
+          }
+          return '';
+        };
+
+        const encodedBody = getPlainText(msgData.data.payload);
+        let decodedBody = '';
+        try {
+          decodedBody = Buffer.from(encodedBody, 'base64').toString('utf8');
+        } catch (err) {
+          console.warn('⚠️ Kunde inte dekoda body:', err.message);
+        }
+
+        return {
+          id: uuidv4(),
+          from: { name: fromName, email: fromEmail },
+          to: toHeader,
+          subject,
+          body: decodedBody,
+          receivedAt: new Date(Number(msgData.data.internalDate)).toISOString(),
+          isReplied: false
+        };
+      })
+    );
+
+    // Filtrera bort de som inte är till simon@yran.se
+    const relevant = emailData.filter(mail =>
+      mail.to?.toLowerCase().includes('simon@yran.se')
+    );
+
+    fs.writeFileSync(
+      path.join(__dirname, 'email-cache.json'),
+      JSON.stringify(relevant, null, 2)
+    );
+
+    console.log(`✅ Sparat ${relevant.length} relevanta mail till cache`);
+  } catch (error) {
+    console.error('❌ FEL VID FETCH AV MAIL:', {
+      message: error.message,
+      stack: error.stack,
+      response: error.response?.data
     });
+    throw error;
   }
-
-  fs.writeFileSync(path.join(__dirname, 'email-cache.json'), JSON.stringify(allEmails, null, 2));
-  console.log(`✅ Sparat ${allEmails.length} relevanta mail till cache`);
-  return allEmails;
 };
 
 module.exports = fetchEmails;
