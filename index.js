@@ -1,4 +1,7 @@
 require('dotenv').config();
+console.log("✅ GMAIL_CLIENT_ID loaded:", process.env.GMAIL_CLIENT_ID); // <– TEMP LOGG
+console.log("✅ REFRESH_TOKEN:", process.env.GMAIL_REFRESH_TOKEN ? '✔️' : '❌ MISSING');
+console.log("✅ CLIENT_SECRET:", process.env.GMAIL_CLIENT_SECRET ? '✔️' : '❌ MISSING');
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
