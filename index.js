@@ -1,102 +1,107 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { fetchEmails, getThread } = require('./fetchEmails');
-const OpenAI = require('openai');
+const bodyParser = require('body-parser');
+const fetchEmails = require('./fetchEmails');
+const { OpenAI } = require('openai');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Middleware
 app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
 
-// OpenAI-setup
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-// Hälsokontroll
-app.get('/', (req, res) => {
-  res.send('Simon HQ backend is running.');
-});
-
-// GET /emails – senaste mail
+// 1) Fetch emails & threads
 app.get('/emails', async (req, res) => {
   try {
-    const emails = await fetchEmails();
+    const emails = await fetchEmails.listThreads();  // implementerat i fetchEmails.js
     res.json(emails);
-  } catch (error) {
-    console.error('Fel vid hämtning av e-post:', error);
-    res.status(500).json({ error: 'Kunde inte hämta e-post.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch emails' });
   }
 });
 
-// GET /threads/:threadId – hela mailtråden
 app.get('/threads/:threadId', async (req, res) => {
-  const { threadId } = req.params;
-  console.log('🔍 Mottaget GET /threads with threadId=', threadId);
   try {
-    const thread = await getThread(threadId);
-    console.log(`🧵 Tråd innehåller ${thread.length} meddelanden`);
+    const thread = await fetchEmails.getThread(req.params.threadId);
     res.json(thread);
-  } catch (error) {
-    console.error('Fel vid hämtning av tråd:', error);
-    res.status(500).json({ error: 'Kunde inte hämta tråd.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch thread' });
   }
 });
 
-// POST /email/reply – generera AI-svar med hela tråden som kontext
+// 2) Generera AI-svar
 app.post('/email/reply', async (req, res) => {
-  console.log('🔍 Mottaget POST /email/reply payload:', req.body);
-
   const { threadId, instruction } = req.body;
-  if (!threadId || !instruction) {
-    console.error('⛔️ Saknas threadId eller instruction');
-    return res.status(400).json({ error: 'threadId och instruction krävs' });
-  }
-
   try {
-    // Hämta hela tråden
-    const thread = await getThread(threadId);
-    console.log(`🧵 Thread (${thread.length} meddelanden):`, thread);
-
-    // Bygg prompt
-    const messages = thread
-      .map(msg =>
-        `Från: ${msg.from}\nTill: ${msg.to}\nDatum: ${msg.date}\nÄmne: ${msg.subject}\n\n${msg.body}`
-      )
-      .join('\n\n---\n\n');
-    const prompt = `
-Du är en professionell assistent som hjälper till att besvara mail. Här är hela konversationen hittills:
-
-${messages}
-
-Instruktion från användaren: ${instruction}
-
-Skriv ett passande svarsutkast på svenska.
-`;
-
-    console.log('📢 GPT-prompt:', prompt);
-
-    // Anropa OpenAI
+    const thread = await fetchEmails.getThread(threadId);
+    const content = thread.messages.map(m => m.body).join('\n\n');
+    const prompt = `${instruction || 'Write a polite reply to this email:'}\n\n${content}`;
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.6,
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }]
     });
-
-    const reply = completion.choices[0].message.content.trim();
-    console.log('✅ GPT-svar:', reply);
-
-    return res.json({ reply });
-  } catch (error) {
-    console.error('❌ Fel i /email/reply:', error);
-    return res.status(500).json({ error: error.message || 'Kunde inte generera svar.' });
+    res.json({ draft: completion.choices[0].message.content });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'AI generation failed' });
   }
 });
 
-// Starta servern
-app.listen(PORT, () => {
-  console.log(`Servern är igång på port ${PORT}`);
+// 3) Skicka mail
+app.post('/email/send-reply', async (req, res) => {
+  const { threadId, draft } = req.body;
+  try {
+    // Hämta originalmottagare från tråden
+    const thread = await fetchEmails.getThread(threadId);
+    const to = thread.messages[0].from;
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: process.env.SMTP_PORT,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+      }
+    });
+    await transporter.sendMail({
+      from: process.env.SMTP_USER,
+      to,
+      subject: `Re: ${thread.subject}`,
+      text: draft
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to send email' });
+  }
 });
+
+// 4) Spara utkast
+app.put('/email/drafts/:threadId', async (req, res) => {
+  const { threadId } = req.params;
+  const { draft } = req.body;
+  try {
+    // Implementera egen lagring, t.ex. Notion, fil eller databas. Här mock:
+    await saveDraft(threadId, draft);
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to save draft' });
+  }
+});
+
+// Starta server
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
+
+// Mock-funktion (lägg in riktig Notion/database-integration här)
+async function saveDraft(threadId, draft) {
+  // t.ex. skriv till en JSON-fil eller databas
+  const fs = require('fs').promises;
+  await fs.writeFile(`draft_${threadId}.txt`, draft, 'utf8');
+}
