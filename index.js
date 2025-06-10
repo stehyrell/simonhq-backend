@@ -6,9 +6,10 @@ const path = require('path');
 const { google } = require('googleapis');
 const { OpenAI } = require('openai');
 
-console.log("✅ GMAIL_CLIENT_ID loaded:", process.env.GMAIL_CLIENT_ID);
-console.log("✅ REFRESH_TOKEN:", process.env.GMAIL_REFRESH_TOKEN ? '✔️' : '❌ MISSING');
+// === LOGG ===
+console.log("✅ GMAIL_CLIENT_ID loaded:", process.env.GMAIL_CLIENT_ID || '❌ MISSING');
 console.log("✅ CLIENT_SECRET:", process.env.GMAIL_CLIENT_SECRET ? '✔️' : '❌ MISSING');
+console.log("✅ REFRESH_TOKEN:", process.env.GMAIL_REFRESH_TOKEN ? '✔️' : '❌ MISSING');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,22 +17,24 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// === Gmail auth ===
+// === Gmail OAuth2 Setup ===
 const auth = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET
 );
+
 auth.setCredentials({
   refresh_token: process.env.GMAIL_REFRESH_TOKEN
 });
+
 const gmail = google.gmail({ version: 'v1', auth });
 
-// === OpenAI setup ===
+// === OpenAI Setup (passiv i detta steg) ===
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// === /emails – Hämta mail till simon@yran.se ===
+// === EMAIL FETCH ENDPOINT ===
 app.get('/emails', async (req, res) => {
   try {
     console.log("📩 /emails endpoint called");
@@ -72,42 +75,17 @@ app.get('/emails', async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error('❌ Fel vid hämtning av mail:', err);
-    res.status(500).json({ message: 'Fel vid hämtning av mail' });
-  }
-});
-
-// === /email/reply – Skapa GPT-svar ===
-app.post('/email/reply', async (req, res) => {
-  const { instruction, thread } = req.body;
-
-  if (!instruction || !thread) {
-    return res.status(400).json({ message: 'Missing instruction or thread' });
-  }
-
-  try {
-    const messages = thread.messages.map(msg => ({
-      role: 'user',
-      content: `Från: ${msg.from}\nÄmne: ${msg.subject}\n\n${msg.body}`
-    }));
-
-    const chat = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: 'Du är en vänlig men strategiskt smart mailassistent. Skriv kort, tydligt och med ton anpassad till Simons stil.' },
-        ...messages,
-        { role: 'user', content: instruction }
-      ]
+    console.error('❌ FEL i /emails:', {
+      message: err.message,
+      code: err.code,
+      stack: err.stack,
+      response: err.response?.data || 'no response',
     });
-
-    res.json({ reply: chat.choices[0].message.content });
-  } catch (err) {
-    console.error('❌ GPT-svar kunde inte genereras:', err);
-    res.status(500).json({ message: 'Fel vid GPT-svar', error: err.message });
+    res.status(500).json({ message: 'Fel vid hämtning av mail', error: err.message });
   }
 });
 
-// === Start server ===
+// === START SERVER ===
 app.listen(PORT, () => {
   console.log(`✅ Server listening on port ${PORT}`);
 });
