@@ -78,42 +78,47 @@ app.get('/emails', async (req, res) => {
 // === DUPLICERAD ENDPOINT: /emails/latest ===
 app.get('/emails/latest', async (req, res) => {
   console.log("📩 /emails/latest endpoint called");
-  // Återanvänd exakt samma logik som /emails
-  const { data } = await gmail.users.messages.list({
-    userId: 'me',
-    maxResults: 10,
-    q: 'to:simon@yran.se'
-  });
 
-  const messages = data.messages || [];
-  const result = [];
-
-  for (const message of messages) {
-    const msg = await gmail.users.messages.get({
+  try {
+    const { data } = await gmail.users.messages.list({
       userId: 'me',
-      id: message.id,
-      format: 'full'
+      maxResults: 10,
+      q: 'to:simon@yran.se'
     });
 
-    const headers = msg.data.payload.headers;
-    const subject = headers.find(h => h.name === 'Subject')?.value || '';
-    const from = headers.find(h => h.name === 'From')?.value || '';
-    const body = msg.data.snippet || '';
+    const messages = data.messages || [];
+    const result = [];
 
-    result.push({
-      id: message.id,
-      threadId: msg.data.threadId,
-      from: { name: from, email: from },
-      to: 'simon@yran.se',
-      subject,
-      body,
-      bodyType: 'text',
-      receivedAt: new Date(Number(msg.data.internalDate)).toISOString(),
-      isReplied: false
-    });
+    for (const message of messages) {
+      const msg = await gmail.users.messages.get({
+        userId: 'me',
+        id: message.id,
+        format: 'full'
+      });
+
+      const headers = msg.data.payload.headers;
+      const subject = headers.find(h => h.name === 'Subject')?.value || '';
+      const from = headers.find(h => h.name === 'From')?.value || '';
+      const body = msg.data.snippet || '';
+
+      result.push({
+        id: message.id,
+        threadId: msg.data.threadId,
+        from: { name: from, email: from },
+        to: 'simon@yran.se',
+        subject,
+        body,
+        bodyType: 'text',
+        receivedAt: new Date(Number(msg.data.internalDate)).toISOString(),
+        isReplied: false
+      });
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error('❌ Fel vid hämtning av latest emails:', err);
+    res.status(500).json({ message: 'Fel vid hämtning av latest emails', error: err.message });
   }
-
-  res.json(result);
 });
 
 // === Endpoint: /email/reply ===
@@ -199,6 +204,45 @@ app.post('/email/send-reply', async (req, res) => {
   } catch (err) {
     console.error("❌ Fel vid mailutskick:", err);
     res.status(500).json({ error: 'Fel vid utskick', message: err.message });
+  }
+});
+
+// === NY ENDPOINT: /email/thread/:id ===
+app.get('/email/thread/:id', async (req, res) => {
+  const threadId = req.params.id;
+
+  if (!threadId) {
+    return res.status(400).json({ error: "threadId krävs i URL" });
+  }
+
+  try {
+    const { data } = await gmail.users.threads.get({
+      userId: 'me',
+      id: threadId,
+      format: 'full'
+    });
+
+    const messages = data.messages.map(msg => {
+      const headers = msg.payload.headers;
+      const subject = headers.find(h => h.name === 'Subject')?.value || '';
+      const from = headers.find(h => h.name === 'From')?.value || '';
+      const date = headers.find(h => h.name === 'Date')?.value || '';
+      const body = msg.payload.parts?.[0]?.body?.data
+        ? Buffer.from(msg.payload.parts[0].body.data, 'base64').toString('utf8')
+        : '';
+
+      return {
+        from,
+        subject,
+        body,
+        date: new Date(date).toISOString()
+      };
+    });
+
+    res.json({ threadId, messages });
+  } catch (err) {
+    console.error("❌ Fel vid hämtning av tråd:", err);
+    res.status(500).json({ error: 'Kunde inte hämta tråden', message: err.message });
   }
 });
 
