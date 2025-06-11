@@ -75,6 +75,47 @@ app.get('/emails', async (req, res) => {
   }
 });
 
+// === DUPLICERAD ENDPOINT: /emails/latest ===
+app.get('/emails/latest', async (req, res) => {
+  console.log("📩 /emails/latest endpoint called");
+  // Återanvänd exakt samma logik som /emails
+  const { data } = await gmail.users.messages.list({
+    userId: 'me',
+    maxResults: 10,
+    q: 'to:simon@yran.se'
+  });
+
+  const messages = data.messages || [];
+  const result = [];
+
+  for (const message of messages) {
+    const msg = await gmail.users.messages.get({
+      userId: 'me',
+      id: message.id,
+      format: 'full'
+    });
+
+    const headers = msg.data.payload.headers;
+    const subject = headers.find(h => h.name === 'Subject')?.value || '';
+    const from = headers.find(h => h.name === 'From')?.value || '';
+    const body = msg.data.snippet || '';
+
+    result.push({
+      id: message.id,
+      threadId: msg.data.threadId,
+      from: { name: from, email: from },
+      to: 'simon@yran.se',
+      subject,
+      body,
+      bodyType: 'text',
+      receivedAt: new Date(Number(msg.data.internalDate)).toISOString(),
+      isReplied: false
+    });
+  }
+
+  res.json(result);
+});
+
 // === Endpoint: /email/reply ===
 app.post('/email/reply', async (req, res) => {
   let { threadId, prompt, systemPrompt } = req.body;
@@ -130,7 +171,38 @@ app.post('/email/reply', async (req, res) => {
   }
 });
 
-// === NEW ENDPOINT: /ai/yran/context ===
+// === NY ENDPOINT: /email/send-reply ===
+app.post('/email/send-reply', async (req, res) => {
+  const { to, subject, body } = req.body;
+
+  if (!to || !subject || !body) {
+    return res.status(400).json({ error: "to, subject och body krävs" });
+  }
+
+  try {
+    const raw = [
+      `To: ${to}`,
+      'Subject: ' + subject,
+      'Content-Type: text/html; charset=UTF-8',
+      '',
+      body
+    ].join('\n');
+
+    await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: {
+        raw: Buffer.from(raw).toString('base64url')
+      }
+    });
+
+    res.json({ status: '✅ Mail skickat' });
+  } catch (err) {
+    console.error("❌ Fel vid mailutskick:", err);
+    res.status(500).json({ error: 'Fel vid utskick', message: err.message });
+  }
+});
+
+// === Endpoint: /ai/yran/context ===
 app.get('/ai/yran/context', (req, res) => {
   const contextPath = path.join(__dirname, 'yran_brain.json');
   fs.readFile(contextPath, 'utf8', (err, data) => {
