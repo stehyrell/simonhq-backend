@@ -13,9 +13,9 @@ app.use(cors());
 app.use(express.json());
 
 // === TEMP LOGGAR ===
-console.log("\u2705 GMAIL_CLIENT_ID loaded:", process.env.GMAIL_CLIENT_ID);
-console.log("\u2705 REFRESH_TOKEN:", process.env.GMAIL_REFRESH_TOKEN ? 'OK' : 'MISSING');
-console.log("\u2705 CLIENT_SECRET:", process.env.GMAIL_CLIENT_SECRET ? 'OK' : 'MISSING');
+console.log("✅ GMAIL_CLIENT_ID loaded:", process.env.GMAIL_CLIENT_ID);
+console.log("✅ REFRESH_TOKEN:", process.env.GMAIL_REFRESH_TOKEN ? 'OK' : 'MISSING');
+console.log("✅ CLIENT_SECRET:", process.env.GMAIL_CLIENT_SECRET ? 'OK' : 'MISSING');
 
 // === Gmail Auth Setup ===
 const auth = new google.auth.OAuth2(
@@ -33,7 +33,7 @@ const openai = new OpenAI({
 // === Endpoint: Hämta senaste mail ===
 app.get('/emails', async (req, res) => {
   try {
-    console.log("\ud83d\udce9 /emails endpoint called");
+    console.log("📩 /emails endpoint called");
     const { data } = await gmail.users.messages.list({
       userId: 'me',
       maxResults: 10,
@@ -70,7 +70,7 @@ app.get('/emails', async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error('\u274c Fel vid hämtning av mail:', err);
+    console.error('❌ Fel vid hämtning av mail:', err);
     res.status(500).json({ message: 'Fel vid hämtning av mail', error: err.message });
   }
 });
@@ -78,13 +78,20 @@ app.get('/emails', async (req, res) => {
 // === Endpoint: Generera GPT-svar ===
 app.post('/email/reply', async (req, res) => {
   console.log("🧵 DEBUG: Rå req.body = ", req.body);
+
+  // 🔁 TEMP-FIX: Om frontend fortfarande skickar 'instruction'
+  if (req.body.instruction && !req.body.prompt) {
+    req.body.prompt = req.body.instruction;
+    console.log("🛠️  FIX: Mappade 'instruction' till 'prompt'");
+  }
+
   const { threadId, prompt } = req.body;
 
   if (!threadId || !prompt) {
     return res.status(400).json({ error: "threadId och prompt krävs" });
   }
 
-  console.log("\ud83d\udd27 /email/reply called with:", { threadId, prompt });
+  console.log("🔧 /email/reply called with:", { threadId, prompt });
 
   try {
     const thread = await gmail.users.threads.get({
@@ -113,12 +120,13 @@ app.post('/email/reply', async (req, res) => {
     const reply = completion.choices[0]?.message?.content || '';
     res.json({ reply });
   } catch (err) {
-    console.error("\u274c Fel vid GPT-generering:", err);
+    console.error("❌ Fel vid GPT-generering:", err);
     res.status(500).json({ message: 'Fel vid GPT-generering', error: err.message });
   }
 });
 
 // === Starta Server ===
 app.listen(PORT, () => {
-  console.log(`\u2705 Server listening on port ${PORT}`);
+  console.log(`✅ Server listening on port ${PORT}`);
 });
+git status
