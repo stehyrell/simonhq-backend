@@ -77,6 +77,7 @@ app.get('/emails', async (req, res) => {
 
 // === Endpoint: Generera GPT-svar ===
 app.post('/email/reply', async (req, res) => {
+  console.log("🧵 DEBUG: Rå req.body = ", req.body);
   const { threadId, prompt } = req.body;
 
   if (!threadId || !prompt) {
