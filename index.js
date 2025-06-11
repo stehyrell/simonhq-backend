@@ -13,14 +13,16 @@ console.log("✅ CLIENT_SECRET:", process.env.GMAIL_CLIENT_SECRET ? '✔️' : '
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ✅ Tillåt Lovable (prod & preview) i CORS
 app.use(cors({
-  origin: 'https://lovable.dev',
-  methods: ['GET', 'POST'],
-  credentials: true
+  origin: [
+    'https://lovable.dev',
+    'https://id-preview--c425777f-df3c-4fdd-af29-76e7a96e2758.lovable.app'
+  ]
 }));
 app.use(express.json());
 
-// Gmail auth
+// === Gmail-auth setup ===
 const auth = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET
@@ -28,16 +30,13 @@ const auth = new google.auth.OAuth2(
 auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 const gmail = google.gmail({ version: 'v1', auth });
 
-// OpenAI setup
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+// === OpenAI setup ===
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// GET /emails
+// === ENDPOINT: /emails ===
 app.get('/emails', async (req, res) => {
   try {
     console.log("📩 /emails endpoint called");
-
     const { data } = await gmail.users.messages.list({
       userId: 'me',
       maxResults: 10,
@@ -74,37 +73,38 @@ app.get('/emails', async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error('❌ Fel vid hämtning av mail:', err);
+    console.error('❌ FEL i /emails:', err.message || err);
     res.status(500).json({ message: 'Fel vid hämtning av mail', error: err.message });
   }
 });
 
-// POST /email/reply
+// === ENDPOINT: /email/reply ===
 app.post('/email/reply', async (req, res) => {
+  console.log("🤖 /email/reply endpoint called");
+  const { threadId, messageId, prompt } = req.body;
+
+  if (!threadId || !prompt) {
+    return res.status(400).json({ error: 'threadId och prompt krävs' });
+  }
+
   try {
-    console.log("🤖 /email/reply endpoint called");
-    const { threadId, messageId, prompt } = req.body;
-
-    if (!threadId || !prompt) {
-      return res.status(400).json({ error: "Missing threadId or prompt" });
-    }
-
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
-      messages: [
-        { role: 'system', content: 'Du är Simons AI-assistent. Generera korta, vänliga och professionella svar på svenska.' },
-        { role: 'user', content: prompt }
-      ]
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7
     });
 
     const reply = completion.choices[0].message.content;
+    console.log("✅ GPT-svar genererat");
+
     res.json({ reply });
   } catch (err) {
-    console.error("❌ Fel i /email/reply:", err);
-    res.status(500).json({ message: "Fel vid generering av svar", error: err.message });
+    console.error("❌ FEL i /email/reply:", err.message || err);
+    res.status(500).json({ message: 'Fel vid generering av svar', error: err.message });
   }
 });
 
+// === STARTA SERVER ===
 app.listen(PORT, () => {
   console.log(`✅ Server listening on port ${PORT}`);
 });
