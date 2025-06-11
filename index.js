@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -12,18 +13,16 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// === Gmail Auth Setup ===
+// === Gmail & OpenAI Setup ===
 const auth = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET
 );
 auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 const gmail = google.gmail({ version: 'v1', auth });
-
-// === OpenAI Setup ===
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// === Endpoint: /emails (Live fetch) ===
+// === /emails ===
 app.get('/emails', async (req, res) => {
   try {
     const { data } = await gmail.users.messages.list({
@@ -62,17 +61,16 @@ app.get('/emails', async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error('❌ /emails error:', err);
     res.status(500).json({ message: 'Fel vid hämtning av mail', error: err.message });
   }
 });
 
-// === Endpoint: /emails/latest (cache fallback) ===
+// === /emails/latest ===
 app.get('/emails/latest', async (req, res) => {
-  res.redirect('/emails'); // Använder live-data tills caching implementeras
+  res.redirect('/emails');
 });
 
-// === Endpoint: /email/thread/:id ===
+// === /email/thread/:id ===
 app.get('/email/thread/:id', async (req, res) => {
   const threadId = req.params.id;
   try {
@@ -100,12 +98,11 @@ app.get('/email/thread/:id', async (req, res) => {
 
     res.json({ threadId, messages });
   } catch (err) {
-    console.error('❌ /email/thread error:', err);
     res.status(500).json({ message: 'Kunde inte hämta tråd', error: err.message });
   }
 });
 
-// === Endpoint: /email/reply ===
+// === /email/reply ===
 app.post('/email/reply', async (req, res) => {
   let { threadId, prompt, systemPrompt } = req.body;
 
@@ -118,29 +115,58 @@ app.post('/email/reply', async (req, res) => {
   }
 
   try {
-    const thread = await gmail.users.threads.get({
-      userId: 'me',
-      id: threadId,
-      format: 'full'
-    });
+    let messages = [];
 
-    const messages = thread.data.messages.map(msg => {
-      const headers = msg.payload.headers;
-      const from = headers.find(h => h.name === 'From')?.value || '';
-      const subject = headers.find(h => h.name === 'Subject')?.value || '';
-      const body = msg.payload.parts?.[0]?.body?.data
-        ? Buffer.from(msg.payload.parts[0].body.data, 'base64').toString('utf8')
-        : '';
-      return `Från: ${from}\nÄmne: ${subject}\n${body}`;
-    });
+    if (threadId === 'yran-brain-chat') {
+      messages = ["(Ingen tidigare konversation – använd systemPrompt och fråga som grund)"];
+    } else {
+      const thread = await gmail.users.threads.get({
+        userId: 'me',
+        id: threadId,
+        format: 'full'
+      });
 
-    const fullPrompt = `Tidigare mailtråd:\n${messages.join('\n\n')}\n\nInstruktion:\n${prompt}`;
+      messages = thread.data.messages.map(msg => {
+        const headers = msg.payload.headers;
+        const from = headers.find(h => h.name === 'From')?.value || '';
+        const subject = headers.find(h => h.name === 'Subject')?.value || '';
+
+        let body = '';
+
+        const parts = msg.payload.parts || [];
+        const plain = parts.find(p => p.mimeType === 'text/plain');
+        const html = parts.find(p => p.mimeType === 'text/html');
+        const rawBody = plain?.body?.data || html?.body?.data || msg.payload.body?.data;
+
+        if (rawBody) {
+          body = Buffer.from(rawBody, 'base64').toString('utf8');
+        }
+
+        return `Från: ${from}
+Ämne: ${subject}
+${body}`;
+      }).filter(Boolean);
+    }
+
+    const chatPrompt = `Tidigare mailtråd:
+${messages.join('
+
+')}
+
+Instruktion:
+${prompt}`;
+
+    fs.appendFileSync('logs/promptlog.txt', `
+
+====
+${new Date().toISOString()}
+${chatPrompt}`);
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt || 'Du är en assistent som svarar på mail.' },
-        { role: 'user', content: fullPrompt }
+        { role: 'user', content: chatPrompt }
       ],
       temperature: 0.7
     });
@@ -148,12 +174,11 @@ app.post('/email/reply', async (req, res) => {
     const reply = completion.choices[0]?.message?.content || '';
     res.json({ reply });
   } catch (err) {
-    console.error('❌ GPT-generering error:', err);
     res.status(500).json({ message: 'Fel vid GPT-generering', error: err.message });
   }
 });
 
-// === Endpoint: /email/send-reply ===
+// === /email/send-reply ===
 app.post('/email/send-reply', async (req, res) => {
   const { to, subject, body } = req.body;
 
@@ -167,7 +192,8 @@ app.post('/email/send-reply', async (req, res) => {
     'Content-Type: text/html; charset=UTF-8',
     '',
     body
-  ].join('\n');
+  ].join('
+');
 
   try {
     await gmail.users.messages.send({
@@ -183,17 +209,15 @@ app.post('/email/send-reply', async (req, res) => {
 
     res.json({ message: 'Svar skickat' });
   } catch (err) {
-    console.error('❌ Fel vid utskick:', err);
     res.status(500).json({ message: 'Fel vid utskick', error: err.message });
   }
 });
 
-// === Endpoint: /ai/yran/context ===
+// === /ai/yran/context ===
 app.get('/ai/yran/context', (req, res) => {
   const contextPath = path.join(__dirname, 'yran_brain.json');
   fs.readFile(contextPath, 'utf8', (err, data) => {
     if (err) {
-      console.error("❌ Kunde inte läsa yran_brain.json:", err);
       return res.status(500).json({ error: 'Kunde inte läsa Yran Brain' });
     }
     res.setHeader('Content-Type', 'application/json');
@@ -201,7 +225,7 @@ app.get('/ai/yran/context', (req, res) => {
   });
 });
 
-// === Server start ===
+// === Start server ===
 app.listen(PORT, () => {
-  console.log(`✅ Server listening on port ${PORT}`);
+  console.log(`✅ Servern körs på port ${PORT}`);
 });
