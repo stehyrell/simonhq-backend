@@ -6,41 +6,38 @@ const path = require('path');
 const { google } = require('googleapis');
 const { OpenAI } = require('openai');
 
-// === TEMP DEBUG ===
-console.log("\u2705 GMAIL_CLIENT_ID loaded:", process.env.GMAIL_CLIENT_ID);
-console.log("\u2705 REFRESH_TOKEN:", process.env.GMAIL_REFRESH_TOKEN ? '✔️' : '❌ MISSING');
-console.log("\u2705 CLIENT_SECRET:", process.env.GMAIL_CLIENT_SECRET ? '✔️' : '❌ MISSING');
+console.log("✅ GMAIL_CLIENT_ID loaded:", process.env.GMAIL_CLIENT_ID);
+console.log("✅ REFRESH_TOKEN:", process.env.GMAIL_REFRESH_TOKEN ? '✔️' : '❌ MISSING');
+console.log("✅ CLIENT_SECRET:", process.env.GMAIL_CLIENT_SECRET ? '✔️' : '❌ MISSING');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// === CORS ===
 app.use(cors({
-  origin: ['https://lovable.dev', 'http://localhost:3000'],
+  origin: 'https://lovable.dev',
   methods: ['GET', 'POST'],
   credentials: true
 }));
 app.use(express.json());
 
-// === Gmail auth setup ===
+// Gmail auth
 const auth = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET
 );
-auth.setCredentials({
-  refresh_token: process.env.GMAIL_REFRESH_TOKEN
-});
+auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 const gmail = google.gmail({ version: 'v1', auth });
 
-// === OpenAI setup ===
+// OpenAI setup
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// === GET /emails ===
+// GET /emails
 app.get('/emails', async (req, res) => {
   try {
-    console.log("\ud83d\udce9 /emails endpoint called");
+    console.log("📩 /emails endpoint called");
+
     const { data } = await gmail.users.messages.list({
       userId: 'me',
       maxResults: 10,
@@ -77,34 +74,37 @@ app.get('/emails', async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error('\u274c Fel vid hämtning av mail:', err);
+    console.error('❌ Fel vid hämtning av mail:', err);
     res.status(500).json({ message: 'Fel vid hämtning av mail', error: err.message });
   }
 });
 
-// === POST /email/reply ===
+// POST /email/reply
 app.post('/email/reply', async (req, res) => {
   try {
+    console.log("🤖 /email/reply endpoint called");
     const { threadId, messageId, prompt } = req.body;
-    console.log("\u2705 /email/reply called with:", req.body);
+
+    if (!threadId || !prompt) {
+      return res.status(400).json({ error: "Missing threadId or prompt" });
+    }
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
-        { role: 'system', content: 'Du är en professionell assistent. Formulera ett kort, vänligt och tydligt svar på mailet.' },
+        { role: 'system', content: 'Du är Simons AI-assistent. Generera korta, vänliga och professionella svar på svenska.' },
         { role: 'user', content: prompt }
       ]
     });
 
     const reply = completion.choices[0].message.content;
     res.json({ reply });
-  } catch (error) {
-    console.error("\u274c Fel i /email/reply:", error);
-    res.status(500).json({ message: 'Fel vid svarsgenerering', error: error.message });
+  } catch (err) {
+    console.error("❌ Fel i /email/reply:", err);
+    res.status(500).json({ message: "Fel vid generering av svar", error: err.message });
   }
 });
 
-// === START SERVER ===
 app.listen(PORT, () => {
-  console.log(`\u2705 Server listening on port ${PORT}`);
+  console.log(`✅ Server listening on port ${PORT}`);
 });
