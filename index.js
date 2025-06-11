@@ -77,13 +77,20 @@ app.get('/emails', async (req, res) => {
 
 // === Endpoint: /email/reply ===
 app.post('/email/reply', async (req, res) => {
-  const { threadId, prompt } = req.body;
+  let { threadId, prompt } = req.body;
+
+  // ✅ Fallback om frontend fortfarande använder instruction
+  if (!prompt && req.body.instruction) {
+    console.warn("⚠️ Frontend skickade 'instruction' istället för 'prompt' – mappat om automatiskt.");
+    prompt = req.body.instruction;
+  }
 
   if (!threadId || !prompt) {
+    console.error("❌ Saknar threadId eller prompt i request:", req.body);
     return res.status(400).json({ error: "threadId och prompt krävs" });
   }
 
-  console.log("🛠️ DEBUG: Rå req.body =", req.body);
+  console.log("🧠 /email/reply called med:", { threadId, prompt });
 
   try {
     const thread = await gmail.users.threads.get({
