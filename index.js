@@ -12,10 +12,10 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// === TEMP LOGGAR ===
-console.log("✅ GMAIL_CLIENT_ID loaded:", process.env.GMAIL_CLIENT_ID);
-console.log("✅ REFRESH_TOKEN:", process.env.GMAIL_REFRESH_TOKEN ? 'OK' : 'MISSING');
-console.log("✅ CLIENT_SECRET:", process.env.GMAIL_CLIENT_SECRET ? 'OK' : 'MISSING');
+// === LOGGAR ===
+console.log("\u2705 GMAIL_CLIENT_ID loaded:", process.env.GMAIL_CLIENT_ID);
+console.log("\u2705 REFRESH_TOKEN:", process.env.GMAIL_REFRESH_TOKEN ? 'OK' : 'MISSING');
+console.log("\u2705 CLIENT_SECRET:", process.env.GMAIL_CLIENT_SECRET ? 'OK' : 'MISSING');
 
 // === Gmail Auth Setup ===
 const auth = new google.auth.OAuth2(
@@ -26,30 +26,28 @@ auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 const gmail = google.gmail({ version: 'v1', auth });
 
 // === OpenAI Setup ===
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// === Ladda in Yran Brain JSON ===
+let yranBrain = null;
+try {
+  const rawData = fs.readFileSync(path.join(__dirname, 'yran_brain.json'), 'utf-8');
+  yranBrain = JSON.parse(rawData);
+  console.log("\u2705 Yran Brain loaded successfully");
+} catch (err) {
+  console.error("\u274C Failed to load Yran Brain:", err);
+}
 
 // === Endpoint: Hämta senaste mail ===
 app.get('/emails', async (req, res) => {
   try {
-    console.log("📩 /emails endpoint called");
-    const { data } = await gmail.users.messages.list({
-      userId: 'me',
-      maxResults: 10,
-      q: 'to:simon@yran.se'
-    });
-
+    console.log("\ud83d\udce9 /emails endpoint called");
+    const { data } = await gmail.users.messages.list({ userId: 'me', maxResults: 10, q: 'to:simon@yran.se' });
     const messages = data.messages || [];
     const result = [];
 
     for (const message of messages) {
-      const msg = await gmail.users.messages.get({
-        userId: 'me',
-        id: message.id,
-        format: 'full'
-      });
-
+      const msg = await gmail.users.messages.get({ userId: 'me', id: message.id, format: 'full' });
       const headers = msg.data.payload.headers;
       const subject = headers.find(h => h.name === 'Subject')?.value || '';
       const from = headers.find(h => h.name === 'From')?.value || '';
@@ -70,28 +68,20 @@ app.get('/emails', async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error('❌ Fel vid hämtning av mail:', err);
+    console.error('\u274c Fel vid hämtning av mail:', err);
     res.status(500).json({ message: 'Fel vid hämtning av mail', error: err.message });
   }
 });
 
-// === Endpoint: Generera GPT-svar ===
+// === Endpoint: GPT-svar med Yran Brain ===
 app.post('/email/reply', async (req, res) => {
   const { threadId, prompt } = req.body;
+  if (!threadId || !prompt) return res.status(400).json({ error: "threadId och prompt krävs" });
 
-  if (!threadId || !prompt) {
-    return res.status(400).json({ error: "threadId och prompt krävs" });
-  }
-
-  console.log("🔧 /email/reply called with:", { threadId, prompt });
+  console.log("\ud83d\udd27 /email/reply called with:", { threadId, prompt });
 
   try {
-    const thread = await gmail.users.threads.get({
-      userId: 'me',
-      id: threadId,
-      format: 'full'
-    });
-
+    const thread = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' });
     const messages = thread.data.messages.map(msg => {
       const body = msg.payload.parts?.[0]?.body?.data
         ? Buffer.from(msg.payload.parts[0].body.data, 'base64').toString('utf8')
@@ -101,36 +91,33 @@ app.post('/email/reply', async (req, res) => {
       return `Från: ${from}\nÄmne: ${subject}\n${body}`;
     });
 
-    const chatPrompt = `Du är en assistent som svarar på mail.\n\nTidigare konversation:\n${messages.join('\n\n')}\n\nSkriv ett svar enligt följande instruktion:\n${prompt}`;
+    const systemPrompt = `Du är en AI-assistent för Storsjöyran. Här är din fulla kontext:\n${JSON.stringify(yranBrain)}`;
+    const chatPrompt = `Tidigare konversation:\n${messages.join('\n\n')}\n\nSkriv ett svar enligt följande instruktion:\n${prompt}`;
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
-      messages: [{ role: 'user', content: chatPrompt }],
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: chatPrompt }
+      ],
       temperature: 0.7
     });
 
     const reply = completion.choices[0]?.message?.content || '';
     res.json({ reply });
   } catch (err) {
-    console.error("❌ Fel vid GPT-generering:", err);
+    console.error("\u274c Fel vid GPT-generering:", err);
     res.status(500).json({ message: 'Fel vid GPT-generering', error: err.message });
   }
 });
 
-// === Endpoint: Returnera Yran Brain JSON ===
+// === Endpoint: Hämta Yran Brain ===
 app.get('/ai/yran/context', (req, res) => {
-  const filePath = path.join(__dirname, 'yran_brain.json');
-  try {
-    const jsonData = fs.readFileSync(filePath, 'utf8');
-    res.setHeader('Content-Type', 'application/json');
-    res.send(jsonData);
-  } catch (err) {
-    console.error('❌ Fel vid hämtning av Yran Brain:', err);
-    res.status(500).json({ message: 'Fel vid hämtning av Yran Brain', error: err.message });
-  }
+  if (yranBrain) return res.json(yranBrain);
+  res.status(500).json({ error: "Yran Brain kunde inte laddas." });
 });
 
-// === Starta Server ===
+// === Starta server ===
 app.listen(PORT, () => {
-  console.log(`✅ Server listening on port ${PORT}`);
+  console.log(`\u2705 Server listening on port ${PORT}`);
 });
