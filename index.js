@@ -17,9 +17,11 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
   origin: [
     'https://lovable.dev',
-    'https://id-preview--c425777f-df3c-4fdd-af29-76e7a96e2758.lovable.app'
+    'https://id-preview--c425777f-df3c-4fdd-af29-76e7a96e2758.lovable.app',
+    'https://c425777f-df3c-4fdd-af29-76e7a96e2758.lovableproject.com'  // 👈 Lägg till denna!
   ]
 }));
+
 app.use(express.json());
 
 // === Gmail-auth setup ===
