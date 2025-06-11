@@ -77,9 +77,8 @@ app.get('/emails', async (req, res) => {
 
 // === Endpoint: /email/reply ===
 app.post('/email/reply', async (req, res) => {
-  let { threadId, prompt } = req.body;
+  let { threadId, prompt, systemPrompt } = req.body;
 
-  // ✅ Fallback om frontend fortfarande använder instruction
   if (!prompt && req.body.instruction) {
     console.warn("⚠️ Frontend skickade 'instruction' istället för 'prompt' – mappat om automatiskt.");
     prompt = req.body.instruction;
@@ -90,7 +89,11 @@ app.post('/email/reply', async (req, res) => {
     return res.status(400).json({ error: "threadId och prompt krävs" });
   }
 
-  console.log("🧠 /email/reply called med:", { threadId, prompt });
+  console.log("🧠 /email/reply called med:", {
+    threadId,
+    prompt,
+    systemPrompt: systemPrompt ? '✅ provided' : '❌ missing'
+  });
 
   try {
     const thread = await gmail.users.threads.get({
@@ -112,7 +115,10 @@ app.post('/email/reply', async (req, res) => {
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
-      messages: [{ role: 'user', content: chatPrompt }],
+      messages: [
+        { role: 'system', content: systemPrompt || 'Du är en assistent som svarar på mail.' },
+        { role: 'user', content: chatPrompt }
+      ],
       temperature: 0.7
     });
 
