@@ -1,4 +1,5 @@
-require('dotenv').config();
+" +
+"require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -77,14 +78,6 @@ app.get('/emails', async (req, res) => {
 
 // === Endpoint: Generera GPT-svar ===
 app.post('/email/reply', async (req, res) => {
-  console.log("🧵 DEBUG: Rå req.body = ", req.body);
-
-  // 🔁 TEMP-FIX: Om frontend fortfarande skickar 'instruction'
-  if (req.body.instruction && !req.body.prompt) {
-    req.body.prompt = req.body.instruction;
-    console.log("🛠️  FIX: Mappade 'instruction' till 'prompt'");
-  }
-
   const { threadId, prompt } = req.body;
 
   if (!threadId || !prompt) {
@@ -122,6 +115,19 @@ app.post('/email/reply', async (req, res) => {
   } catch (err) {
     console.error("❌ Fel vid GPT-generering:", err);
     res.status(500).json({ message: 'Fel vid GPT-generering', error: err.message });
+  }
+});
+
+// === Endpoint: Returnera Yran Brain JSON ===
+app.get('/ai/yran/context', (req, res) => {
+  const filePath = path.join(__dirname, 'yran_brain.json');
+  try {
+    const jsonData = fs.readFileSync(filePath, 'utf8');
+    res.setHeader('Content-Type', 'application/json');
+    res.send(jsonData);
+  } catch (err) {
+    console.error('❌ Fel vid hämtning av Yran Brain:', err);
+    res.status(500).json({ message: 'Fel vid hämtning av Yran Brain', error: err.message });
   }
 });
 

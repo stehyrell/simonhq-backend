@@ -1,0 +1,135 @@
+{
+  "festival": {
+    "name": "Storsjöyran",
+    "location": "Östersund, Sweden",
+    "audience": "100,000+ urban, progressive, music-oriented visitors",
+    "brand_tone": "folkfest meets cultural sharpness with a Norrland twist",
+    "organization": {
+      "legal_structure": "Storsjöyran Evenemang AB",
+      "key_roles": {
+        "CEO": "Anders Teglund",
+        "Business Development": "Simon Tehyrell",
+        "Sponsorship Contact": "simon@yran.se"
+      },
+      "core_values": [
+        "Humor",
+        "Kultur",
+        "Norrlandsidentitet",
+        "Kreativitet"
+      ]
+    }
+  },
+  "partner_levels": [
+    {
+      "name": "Supporter",
+      "price_range": "30,000–70,000 SEK",
+      "benefits": [
+        "LED screen exposure",
+        "festival passes",
+        "social media mention"
+      ],
+      "note": "Yranfamiljen ingår alltid."
+    },
+    {
+      "name": "Partner",
+      "price_range": "70,000–150,000 SEK",
+      "benefits": [
+        "LED + social media",
+        "logoplacering",
+        "branded activations"
+      ],
+      "note": "Aktivering via t.ex. ytor, sampling, goodiebags."
+    },
+    {
+      "name": "Huvudpartner",
+      "price_range": "150,000–300,000 SEK",
+      "benefits": [
+        "Prominent branding",
+        "own LED spot",
+        "branded bar/yta",
+        "Yranfamiljen Premium"
+      ],
+      "note": "Flera kontaktpunkter, exklusiv storytelling."
+    },
+    {
+      "name": "Exklusiv partner",
+      "price_range": "300,000+ SEK",
+      "benefits": [
+        "Category exclusivity",
+        "co-branding",
+        "full campaign integration"
+      ],
+      "note": "Endast ett varumärke per kategori."
+    }
+  ],
+  "projects": [
+    {
+      "name": "Krogstråket",
+      "description": "Festivalens mat- och dryckesstråk med barer, sittplatser, nattklubb och aktiveringsytor.",
+      "partners": [
+        "Spendrups",
+        "AR Energy",
+        "Wella (EIMI)"
+      ],
+      "notes": "Serveringstillstånd, Layher-byggen, partnerbranding och LED."
+    },
+    {
+      "name": "STORAN",
+      "description": "Klubbområde på festivalen – DJ:s, LED, takrigg, partnerytor.",
+      "partners": [
+        "Toyota",
+        "Jämtkraft"
+      ],
+      "notes": "Dekortema + sponsorbranding på entréportal, DJ-bås, LED."
+    },
+    {
+      "name": "Trygghetszon",
+      "description": "Område för trygghet, vila, samtal och samtalsstöd.",
+      "partners": [
+        "Östersunds Kommun",
+        "Region Jämtland Härjedalen"
+      ],
+      "notes": "Ej kommersiellt – men sponsorer får exponering i sammanhang med socialt ansvar."
+    },
+    {
+      "name": "Hållbart resande & SAF",
+      "description": "Projekt för att främja hållbart resande och fossilfritt flyg.",
+      "partners": [
+        "SAS",
+        "ST1",
+        "Jämtkraft",
+        "Swedavia"
+      ],
+      "notes": "Pressmeddelande + kommunikationspaket. Ej aktivering på plats."
+    }
+  ],
+  "core_principles": [
+    "Yranfamiljen ingår i alla partnerskap",
+    "Endast ett varumärke per produktkategori",
+    "Storytelling och aktivering > logoplacering",
+    "Alla mail, pitchar och texter ska ha en tydlig, folklig, norrlandsk ton",
+    "Samarbeten ska kännas genuina – undvik greenwashing"
+  ],
+  "common_objections": [
+    {
+      "objection": "Vi får inte sälja på plats – vad får vi då?",
+      "response": "Ni får en unik möjlighet att bygga varumärkesnärvaro, skapa emotionellt avtryck, och nå 100 000 personer live via branding, LED och sociala medier."
+    },
+    {
+      "objection": "Det känns dyrt för bara ett evenemang",
+      "response": "Yran är mer än ett evenemang – det är ett kulturellt nav i Norrland. Ni får storytelling, media, aktivering, nätverk och emotionell koppling – inte bara exponering."
+    }
+  ],
+  "ai_guidelines": {
+    "do": [
+      "Skriv konkret, folkligt och självsäkert",
+      "Referera till tidigare samarbeten där det passar",
+      "Föreslå win-win-aktiveringar där det känns naturligt"
+    ],
+    "don't": [
+      "Överdriv inte värden eller räckvidd",
+      "Ge inte juridiska löften",
+      "Skicka aldrig automatiska mail utan manuell granskning"
+    ]
+  }
+}
