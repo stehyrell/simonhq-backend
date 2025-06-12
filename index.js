@@ -30,6 +30,11 @@ const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
 const scanDriveContext = async () => {
   const folderPath = path.join(__dirname, 'drive', 'SimonHQ_YranBrain');
+  if (!fs.existsSync(folderPath)) {
+    fs.mkdirSync(folderPath, { recursive: true });
+    console.warn('⚠️ Mapp skapad: drive/SimonHQ_YranBrain (innehöll inga filer ännu)');
+  }
+
   const files = fs.readdirSync(folderPath).filter(f => /\.(pdf|docx|txt|md)$/i.test(f));
 
   const context = await Promise.all(files.map(async filename => {
@@ -76,7 +81,37 @@ const scanDriveContext = async () => {
   return context;
 };
 
-// === /drive/context/preview ===
+app.get('/notion/logs', async (req, res) => {
+  const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
+  const sourceFilter = req.query.source;
+
+  try {
+    const response = await notion.databases.query({
+      database_id: dbId,
+      filter: sourceFilter ? {
+        property: 'Källa',
+        select: { equals: sourceFilter }
+      } : undefined
+    });
+
+    const logs = response.results.map(page => {
+      const props = page.properties;
+      return {
+        id: page.id,
+        title: props.Name?.title?.[0]?.text?.content || '(utan titel)',
+        date: props.datum?.date?.start || null,
+        source: props.Källa?.select?.name || null,
+        tag: props.Tagg?.multi_select?.map(t => t.name) || []
+      };
+    });
+
+    res.json({ logs });
+  } catch (err) {
+    console.error('❌ Fel vid /notion/logs:', err);
+    res.status(500).json({ error: 'Kunde inte hämta Notion-loggar.' });
+  }
+});
+
 app.get('/drive/context/preview', async (req, res) => {
   try {
     const context = await scanDriveContext();
@@ -87,7 +122,6 @@ app.get('/drive/context/preview', async (req, res) => {
   }
 });
 
-// === /drive/context ===
 app.get('/drive/context', async (req, res) => {
   try {
     const cachePath = path.join(__dirname, 'yran_brain.json');
@@ -100,7 +134,6 @@ app.get('/drive/context', async (req, res) => {
   }
 });
 
-// === /drive/refresh ===
 app.post('/drive/refresh', async (req, res) => {
   try {
     const updated = await scanDriveContext();
