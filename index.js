@@ -19,24 +19,13 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// === GPT-inspektör logg ===
 const gptPayloadHistory = [];
-
-// === Gmail Setup ===
-const auth = new google.auth.OAuth2(
-  process.env.GMAIL_CLIENT_ID,
-  process.env.GMAIL_CLIENT_SECRET
-);
+const auth = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
 auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 const gmail = google.gmail({ version: 'v1', auth });
-
-// === OpenAI Setup ===
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-// === Notion Setup ===
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
-// === /emails ===
 app.get('/emails', async (req, res) => {
   try {
     const { data } = await gmail.users.messages.list({
@@ -80,12 +69,10 @@ app.get('/emails', async (req, res) => {
   }
 });
 
-// === /email/reply ===
 app.post('/email/reply', async (req, res) => {
   let { threadId, prompt, systemPrompt, source = 'email', tag = '', subject = '' } = req.body;
 
   if (!prompt && req.body.instruction) {
-    console.warn("⚠️ 'instruction' hittades – mappar om till 'prompt'");
     prompt = req.body.instruction;
   }
 
@@ -96,8 +83,10 @@ app.post('/email/reply', async (req, res) => {
   try {
     let messages = [];
 
-    if (threadId === 'yran-brain-chat') {
-      messages = ["(Ingen tidigare konversation – detta är en fristående fråga till Yran Brain)"];
+    const isStandalone = threadId === 'yran-brain-chat' || threadId === 'yranbrain-direct';
+
+    if (isStandalone) {
+      messages = ["(Detta är en fristående fråga till Yran Brain – ingen tidigare mailkonversation)"];
     } else {
       const thread = await gmail.users.threads.get({
         userId: 'me',
@@ -132,14 +121,12 @@ ${prompt}
       temperature: 0.7
     };
 
-    console.log('💥 FINAL PAYLOAD JSON:\n', JSON.stringify(finalPayload, null, 2));
     gptPayloadHistory.unshift(finalPayload);
     gptPayloadHistory.splice(10);
 
     const completion = await openai.chat.completions.create(finalPayload);
     const reply = completion.choices[0]?.message?.content || '';
 
-    // === Logga till Notion ===
     try {
       await notion.pages.create({
         parent: { database_id: process.env.NOTION_YRAN_LOG_DB_ID },
@@ -147,7 +134,7 @@ ${prompt}
           Name: { title: [{ text: { content: subject || "GPT-svar" } }] },
           Källa: { select: { name: source } },
           Tagg: tag ? { multi_select: [{ name: tag }] } : undefined,
-          Datum: { date: { start: new Date().toISOString() } }
+          datum: { date: { start: new Date().toISOString() } }
         },
         children: [
           {
@@ -184,12 +171,10 @@ ${prompt}
   }
 });
 
-// === /email/send-reply ===
 app.post('/email/send-reply', async (req, res) => {
   res.json({ message: "🔧 E-postsvar skickat (simulerat i denna version)" });
 });
 
-// === /ai/yran/context ===
 app.get('/ai/yran/context', (req, res) => {
   const contextPath = path.join(__dirname, 'yran_brain.json');
   fs.readFile(contextPath, 'utf8', (err, data) => {
@@ -202,12 +187,10 @@ app.get('/ai/yran/context', (req, res) => {
   });
 });
 
-// === /debug/gpt-payload ===
 app.get('/debug/gpt-payload', (req, res) => {
   res.json({ history: gptPayloadHistory });
 });
 
-// === /log-test ===
 app.post('/log-test', async (req, res) => {
   try {
     await notion.pages.create({
@@ -215,7 +198,7 @@ app.post('/log-test', async (req, res) => {
       properties: {
         Name: { title: [{ text: { content: '🧪 Testlogg från /log-test' } }] },
         Källa: { select: { name: 'test' } },
-        Datum: { date: { start: new Date().toISOString() } }
+        datum: { date: { start: new Date().toISOString() } }
       },
       children: [
         {
@@ -235,7 +218,6 @@ app.post('/log-test', async (req, res) => {
   }
 });
 
-// === Start server ===
 app.listen(PORT, () => {
   console.log(`✅ Server live på port ${PORT}`);
 });
