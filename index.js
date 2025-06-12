@@ -9,7 +9,13 @@ const { OpenAI } = require('openai');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://preview--simon-hq-orchestra.lovable.app',
+    'https://simonhq.vercel.app', // framtida produktionsdomän
+    'http://localhost:3000' // lokal test
+  ]
+}));
 app.use(express.json());
 
 const gptPayloadHistory = []; // 🧠 GPT-inspektör logg
