@@ -81,6 +81,49 @@ const scanDriveContext = async () => {
   return context;
 };
 
+app.get('/emails', async (req, res) => {
+  try {
+    const { data } = await gmail.users.messages.list({
+      userId: 'me',
+      maxResults: 10,
+      q: 'to:simon@yran.se'
+    });
+
+    const messages = data.messages || [];
+    const result = [];
+
+    for (const message of messages) {
+      const msg = await gmail.users.messages.get({
+        userId: 'me',
+        id: message.id,
+        format: 'full'
+      });
+
+      const headers = msg.data.payload.headers;
+      const subject = headers.find(h => h.name === 'Subject')?.value || '';
+      const from = headers.find(h => h.name === 'From')?.value || '';
+      const body = msg.data.snippet || '';
+
+      result.push({
+        id: message.id,
+        threadId: msg.data.threadId,
+        from: { name: from, email: from },
+        to: 'simon@yran.se',
+        subject,
+        body,
+        bodyType: 'text',
+        receivedAt: new Date(Number(msg.data.internalDate)).toISOString(),
+        isReplied: false
+      });
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error('❌ Fel vid hämtning av mail:', err);
+    res.status(500).json({ message: 'Fel vid hämtning av mail', error: err.message });
+  }
+});
+
 app.get('/notion/logs', async (req, res) => {
   const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
   const sourceFilter = req.query.source;
