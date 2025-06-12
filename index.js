@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
 const { OpenAI } = require('openai');
+const { Client } = require('@notionhq/client');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,15 +13,16 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
   origin: [
     'https://preview--simon-hq-orchestra.lovable.app',
-    'https://simonhq.vercel.app', // framtida produktionsdomän
-    'http://localhost:3000' // lokal test
+    'https://simonhq.vercel.app',
+    'http://localhost:3000'
   ]
 }));
 app.use(express.json());
 
-const gptPayloadHistory = []; // 🧠 GPT-inspektör logg
+// === GPT-inspektör logg ===
+const gptPayloadHistory = [];
 
-// === Gmail Auth Setup ===
+// === Gmail Setup ===
 const auth = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET
@@ -29,9 +31,10 @@ auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 const gmail = google.gmail({ version: 'v1', auth });
 
 // === OpenAI Setup ===
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// === Notion Setup ===
+const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
 // === /emails ===
 app.get('/emails', async (req, res) => {
@@ -79,7 +82,7 @@ app.get('/emails', async (req, res) => {
 
 // === /email/reply ===
 app.post('/email/reply', async (req, res) => {
-  let { threadId, prompt, systemPrompt } = req.body;
+  let { threadId, prompt, systemPrompt, source = 'email', tag = '', subject = '' } = req.body;
 
   if (!prompt && req.body.instruction) {
     console.warn("⚠️ 'instruction' hittades – mappar om till 'prompt'");
@@ -113,8 +116,6 @@ app.post('/email/reply', async (req, res) => {
     }
 
     const chatPrompt = `
-Du är en assistent som svarar på mail.
-
 Tidigare konversation:
 ${messages.join('\n\n')}
 
@@ -137,6 +138,45 @@ ${prompt}
 
     const completion = await openai.chat.completions.create(finalPayload);
     const reply = completion.choices[0]?.message?.content || '';
+
+    // === Logga till Notion ===
+    try {
+      await notion.pages.create({
+        parent: { database_id: process.env.NOTION_YRAN_LOG_DB_ID },
+        properties: {
+          Name: { title: [{ text: { content: subject || "GPT-svar" } }] },
+          Källa: { select: { name: source } },
+          Tagg: tag ? { multi_select: [{ name: tag }] } : undefined,
+          Datum: { date: { start: new Date().toISOString() } }
+        },
+        children: [
+          {
+            object: "block",
+            type: "paragraph",
+            paragraph: {
+              rich_text: [{ type: "text", text: { content: `Fråga: ${prompt}` } }]
+            }
+          },
+          {
+            object: "block",
+            type: "paragraph",
+            paragraph: {
+              rich_text: [{ type: "text", text: { content: `Svar: ${reply}` } }]
+            }
+          },
+          {
+            object: "block",
+            type: "paragraph",
+            paragraph: {
+              rich_text: [{ type: "text", text: { content: `Systemprompt: ${systemPrompt}` } }]
+            }
+          }
+        ]
+      });
+    } catch (logErr) {
+      console.error("⚠️ Kunde inte logga till Notion:", logErr);
+    }
+
     res.json({ reply });
   } catch (err) {
     console.error("❌ GPT-svar misslyckades:", err);
