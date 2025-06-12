@@ -6,6 +6,8 @@ const path = require('path');
 const { google } = require('googleapis');
 const { OpenAI } = require('openai');
 const { Client } = require('@notionhq/client');
+const mammoth = require('mammoth');
+const pdfParse = require('pdf-parse');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -26,195 +28,137 @@ const gmail = google.gmail({ version: 'v1', auth });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
-app.get('/emails', async (req, res) => {
-  try {
-    const { data } = await gmail.users.messages.list({
-      userId: 'me',
-      maxResults: 10,
-      q: 'to:simon@yran.se'
-    });
-
-    const messages = data.messages || [];
-    const result = [];
-
-    for (const message of messages) {
-      const msg = await gmail.users.messages.get({
-        userId: 'me',
-        id: message.id,
-        format: 'full'
-      });
-
-      const headers = msg.data.payload.headers;
-      const subject = headers.find(h => h.name === 'Subject')?.value || '';
-      const from = headers.find(h => h.name === 'From')?.value || '';
-      const body = msg.data.snippet || '';
-
-      result.push({
-        id: message.id,
-        threadId: msg.data.threadId,
-        from: { name: from, email: from },
-        to: 'simon@yran.se',
-        subject,
-        body,
-        bodyType: 'text',
-        receivedAt: new Date(Number(msg.data.internalDate)).toISOString(),
-        isReplied: false
-      });
-    }
-
-    res.json(result);
-  } catch (err) {
-    console.error('❌ Fel vid hämtning av mail:', err);
-    res.status(500).json({ message: 'Fel vid hämtning av mail', error: err.message });
-  }
-});
-
-app.post('/email/reply', async (req, res) => {
-  let { threadId, prompt, systemPrompt, source = 'email', tag = '', subject = '' } = req.body;
-
-  if (!prompt && req.body.instruction) {
-    prompt = req.body.instruction;
-  }
-
-  if (!threadId || !prompt) {
-    return res.status(400).json({ error: "threadId och prompt krävs" });
-  }
-
-  try {
-    let messages = [];
-
-    const isStandalone = threadId === 'yran-brain-chat' || threadId === 'yranbrain-direct';
-
-    if (isStandalone) {
-      messages = ["(Detta är en fristående fråga till Yran Brain – ingen tidigare mailkonversation)"];
-    } else {
-      const thread = await gmail.users.threads.get({
-        userId: 'me',
-        id: threadId,
-        format: 'full'
-      });
-
-      messages = thread.data.messages.map(msg => {
-        const body = msg.payload.parts?.[0]?.body?.data
-          ? Buffer.from(msg.payload.parts[0].body.data, 'base64').toString('utf8')
-          : '';
-        const from = msg.payload.headers.find(h => h.name === 'From')?.value || '';
-        const subject = msg.payload.headers.find(h => h.name === 'Subject')?.value || '';
-        return `Från: ${from}\nÄmne: ${subject}\n${body}`;
-      });
-    }
-
-    const chatPrompt = `
-Tidigare konversation:
-${messages.join('\n\n')}
-
-Skriv ett svar enligt följande instruktion:
-${prompt}
-    `;
-
-    const finalPayload = {
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: systemPrompt || 'Du är en assistent som svarar på mail.' },
-        { role: 'user', content: chatPrompt }
-      ],
-      temperature: 0.7
-    };
-
-    gptPayloadHistory.unshift(finalPayload);
-    gptPayloadHistory.splice(10);
-
-    const completion = await openai.chat.completions.create(finalPayload);
-    const reply = completion.choices[0]?.message?.content || '';
-
-    try {
-      await notion.pages.create({
-        parent: { database_id: process.env.NOTION_YRAN_LOG_DB_ID },
-        properties: {
-          Name: { title: [{ text: { content: subject || "GPT-svar" } }] },
-          Källa: { select: { name: source } },
-          Tagg: tag ? { multi_select: [{ name: tag }] } : undefined,
-          datum: { date: { start: new Date().toISOString() } }
-        },
-        children: [
-          {
-            object: "block",
-            type: "paragraph",
-            paragraph: {
-              rich_text: [{ type: "text", text: { content: `Fråga: ${prompt}` } }]
-            }
-          },
-          {
-            object: "block",
-            type: "paragraph",
-            paragraph: {
-              rich_text: [{ type: "text", text: { content: `Svar: ${reply}` } }]
-            }
-          },
-          {
-            object: "block",
-            type: "paragraph",
-            paragraph: {
-              rich_text: [{ type: "text", text: { content: `Systemprompt: ${systemPrompt}` } }]
-            }
-          }
-        ]
-      });
-    } catch (logErr) {
-      console.error("⚠️ Kunde inte logga till Notion:", logErr);
-    }
-
-    res.json({ reply });
-  } catch (err) {
-    console.error("❌ GPT-svar misslyckades:", err);
-    res.status(500).json({ message: 'GPT-fel', error: err.message });
-  }
-});
-
-app.post('/email/send-reply', async (req, res) => {
-  res.json({ message: "🔧 E-postsvar skickat (simulerat i denna version)" });
-});
-
-app.get('/ai/yran/context', (req, res) => {
-  const contextPath = path.join(__dirname, 'yran_brain.json');
-  fs.readFile(contextPath, 'utf8', (err, data) => {
-    if (err) {
-      console.error("❌ Kunde inte läsa yran_brain.json:", err);
-      return res.status(500).json({ error: 'Kunde inte läsa Yran Brain' });
-    }
-    res.setHeader('Content-Type', 'application/json');
-    res.send(data);
-  });
-});
-
-app.get('/debug/gpt-payload', (req, res) => {
-  res.json({ history: gptPayloadHistory });
-});
-
-app.post('/log-test', async (req, res) => {
+// === /log-to-notion ===
+app.post('/log-to-notion', async (req, res) => {
+  const { title, källa, tagg, innehåll } = req.body;
   try {
     await notion.pages.create({
       parent: { database_id: process.env.NOTION_YRAN_LOG_DB_ID },
       properties: {
-        Name: { title: [{ text: { content: '🧪 Testlogg från /log-test' } }] },
-        Källa: { select: { name: 'test' } },
+        Name: { title: [{ text: { content: title || 'Logg utan titel' } }] },
+        Källa: { select: { name: källa || 'manual' } },
+        Tagg: tagg ? { multi_select: tagg.map(t => ({ name: t })) } : undefined,
         datum: { date: { start: new Date().toISOString() } }
       },
       children: [
         {
-          object: "block",
-          type: "paragraph",
+          object: 'block',
+          type: 'paragraph',
           paragraph: {
-            rich_text: [{ type: "text", text: { content: 'Detta är en testlogg för att verifiera att Notion-integrationen fungerar.' } }]
+            rich_text: [
+              { type: 'text', text: { content: innehåll || 'Ingen text angiven.' } }
+            ]
           }
         }
       ]
     });
-
-    res.status(200).json({ message: '✅ Lyckad testloggning till Notion!' });
-  } catch (error) {
-    console.error('❌ Testloggning misslyckades:', error);
+    res.status(200).json({ message: '✅ Loggad till Notion via /log-to-notion' });
+  } catch (err) {
+    console.error('❌ Fel vid loggning via /log-to-notion:', err);
     res.status(500).json({ error: 'Loggning till Notion misslyckades.' });
+  }
+});
+
+// === /drive/context ===
+app.get('/drive/context', async (req, res) => {
+  const folderPath = path.join(__dirname, 'drive', 'SimonHQ_YranBrain');
+  try {
+    const files = fs.readdirSync(folderPath).filter(f => /\.(pdf|docx|txt|md)$/i.test(f));
+
+    const context = await Promise.all(files.map(async filename => {
+      const filePath = path.join(folderPath, filename);
+      let fileContent = '';
+
+      try {
+        if (/\.pdf$/i.test(filename)) {
+          const dataBuffer = fs.readFileSync(filePath);
+          const data = await pdfParse(dataBuffer);
+          fileContent = data.text;
+        } else if (/\.docx$/i.test(filename)) {
+          const result = await mammoth.extractRawText({ path: filePath });
+          fileContent = result.value;
+        } else {
+          fileContent = fs.readFileSync(filePath, 'utf-8');
+        }
+      } catch {
+        fileContent = '(Kunde inte läsa innehållet)';
+      }
+
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: 'Sammanfatta innehållet kortfattat för en AI-assistent som hjälper till att svara på frågor om Storsjöyran.'
+          },
+          { role: 'user', content: fileContent.slice(0, 8000) }
+        ]
+      });
+
+      const summary = completion.choices?.[0]?.message?.content || '(Sammanfattning misslyckades)';
+      return {
+        filename,
+        type: path.extname(filename).slice(1),
+        summary,
+        scannedAt: new Date().toISOString()
+      };
+    }));
+
+    const cachePath = path.join(__dirname, 'yran_brain.json');
+    fs.writeFileSync(cachePath, JSON.stringify({ documents: context, lastUpdated: new Date().toISOString() }, null, 2));
+
+    res.json({ documents: context, lastUpdated: new Date().toISOString() });
+  } catch (err) {
+    console.error('❌ Fel vid /drive/context:', err);
+    res.status(500).json({ error: 'Kunde inte hämta Drive-sammanhang.' });
+  }
+});
+
+// === /notion/logs ===
+app.get('/notion/logs', async (req, res) => {
+  const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
+  const sourceFilter = req.query.source;
+
+  try {
+    const response = await notion.databases.query({
+      database_id: dbId,
+      filter: sourceFilter ? {
+        property: 'Källa',
+        select: { equals: sourceFilter }
+      } : undefined
+    });
+
+    const logs = response.results.map(page => {
+      const props = page.properties;
+      return {
+        id: page.id,
+        title: props.Name?.title?.[0]?.text?.content || '(utan titel)',
+        date: props.datum?.date?.start || null,
+        source: props.Källa?.select?.name || null,
+        tag: props.Tagg?.multi_select?.map(t => t.name) || []
+      };
+    });
+
+    res.json({ logs });
+  } catch (err) {
+    console.error('❌ Fel vid /notion/logs:', err);
+    res.status(500).json({ error: 'Kunde inte hämta Notion-loggar.' });
+  }
+});
+
+// === /test ===
+app.get('/test', async (req, res) => {
+  try {
+    const notionPing = await notion.search({ page_size: 1 });
+    const driveExists = fs.existsSync(path.join(__dirname, 'drive', 'SimonHQ_YranBrain'));
+    res.json({
+      notion: notionPing?.results?.length >= 0 ? '✅ OK' : '⚠️ Empty',
+      drive: driveExists ? '✅ Found SimonHQ_YranBrain folder' : '❌ Missing folder',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('❌ Fel vid /test:', err);
+    res.status(500).json({ error: 'Test misslyckades.', details: err.message });
   }
 });
 
