@@ -207,6 +207,34 @@ app.get('/debug/gpt-payload', (req, res) => {
   res.json({ history: gptPayloadHistory });
 });
 
+// === /log-test ===
+app.post('/log-test', async (req, res) => {
+  try {
+    await notion.pages.create({
+      parent: { database_id: process.env.NOTION_YRAN_LOG_DB_ID },
+      properties: {
+        Name: { title: [{ text: { content: '🧪 Testlogg från /log-test' } }] },
+        Källa: { select: { name: 'test' } },
+        Datum: { date: { start: new Date().toISOString() } }
+      },
+      children: [
+        {
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [{ type: "text", text: { content: 'Detta är en testlogg för att verifiera att Notion-integrationen fungerar.' } }]
+          }
+        }
+      ]
+    });
+
+    res.status(200).json({ message: '✅ Lyckad testloggning till Notion!' });
+  } catch (error) {
+    console.error('❌ Testloggning misslyckades:', error);
+    res.status(500).json({ error: 'Loggning till Notion misslyckades.' });
+  }
+});
+
 // === Start server ===
 app.listen(PORT, () => {
   console.log(`✅ Server live på port ${PORT}`);
