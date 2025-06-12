@@ -87,7 +87,29 @@ app.get('/drive/context/preview', async (req, res) => {
   }
 });
 
-// ... resten av dina endpoints fortsätter som tidigare ...
+// === /drive/context ===
+app.get('/drive/context', async (req, res) => {
+  try {
+    const cachePath = path.join(__dirname, 'yran_brain.json');
+    if (!fs.existsSync(cachePath)) throw new Error('Cachefil saknas');
+    const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+    res.json(cached);
+  } catch (err) {
+    console.error('❌ Fel vid /drive/context:', err);
+    res.status(500).json({ error: 'Kunde inte hämta dokumentkontext.' });
+  }
+});
+
+// === /drive/refresh ===
+app.post('/drive/refresh', async (req, res) => {
+  try {
+    const updated = await scanDriveContext();
+    res.json({ documents: updated, lastUpdated: new Date().toISOString() });
+  } catch (err) {
+    console.error('❌ Fel vid /drive/refresh:', err);
+    res.status(500).json({ error: 'Kunde inte uppdatera kontext.' });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`✅ Server live på port ${PORT}`);
