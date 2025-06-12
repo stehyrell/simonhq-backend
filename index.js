@@ -85,20 +85,26 @@ app.post('/email/reply', async (req, res) => {
   }
 
   try {
-    const thread = await gmail.users.threads.get({
-      userId: 'me',
-      id: threadId,
-      format: 'full'
-    });
+    let messages = [];
 
-    const messages = thread.data.messages.map(msg => {
-      const body = msg.payload.parts?.[0]?.body?.data
-        ? Buffer.from(msg.payload.parts[0].body.data, 'base64').toString('utf8')
-        : '';
-      const from = msg.payload.headers.find(h => h.name === 'From')?.value || '';
-      const subject = msg.payload.headers.find(h => h.name === 'Subject')?.value || '';
-      return `Från: ${from}\nÄmne: ${subject}\n${body}`;
-    });
+    if (threadId === 'yran-brain-chat') {
+      messages = ["(Ingen tidigare konversation – detta är en fristående fråga till Yran Brain)"];
+    } else {
+      const thread = await gmail.users.threads.get({
+        userId: 'me',
+        id: threadId,
+        format: 'full'
+      });
+
+      messages = thread.data.messages.map(msg => {
+        const body = msg.payload.parts?.[0]?.body?.data
+          ? Buffer.from(msg.payload.parts[0].body.data, 'base64').toString('utf8')
+          : '';
+        const from = msg.payload.headers.find(h => h.name === 'From')?.value || '';
+        const subject = msg.payload.headers.find(h => h.name === 'Subject')?.value || '';
+        return `Från: ${from}\nÄmne: ${subject}\n${body}`;
+      });
+    }
 
     const chatPrompt = `
 Du är en assistent som svarar på mail.
@@ -119,13 +125,11 @@ ${prompt}
       temperature: 0.7
     };
 
-    // 💥 Logga GPT payload
     console.log('💥 FINAL PAYLOAD JSON:\n', JSON.stringify(finalPayload, null, 2));
     gptPayloadHistory.unshift(finalPayload);
-    gptPayloadHistory.splice(10); // max 10 senaste
+    gptPayloadHistory.splice(10);
 
     const completion = await openai.chat.completions.create(finalPayload);
-
     const reply = completion.choices[0]?.message?.content || '';
     res.json({ reply });
   } catch (err) {
@@ -157,7 +161,7 @@ app.get('/debug/gpt-payload', (req, res) => {
   res.json({ history: gptPayloadHistory });
 });
 
-// === Starta server ===
+// === Start server ===
 app.listen(PORT, () => {
   console.log(`✅ Server live på port ${PORT}`);
 });
