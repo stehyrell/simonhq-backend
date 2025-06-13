@@ -165,3 +165,7 @@ app.get('/drive/status', (req, res) => {
     scannedToday: cache.recentActivity?.scannedToday || 0
   });
 });
+
+app.listen(PORT, () => {
+  console.log(`✅ Simon HQ backend lyssnar på port ${PORT}`);
+});
