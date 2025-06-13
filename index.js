@@ -137,6 +137,46 @@ const summarizeFilesToCache = async (files) => {
   return summaries;
 };
 
+app.post('/email/reply', async (req, res) => {
+  let { threadId, prompt, systemPrompt } = req.body;
+
+  if (!prompt && req.body.instruction) {
+    prompt = req.body.instruction;
+  }
+
+  if (!threadId || !prompt) {
+    return res.status(400).json({ error: "threadId och prompt krävs" });
+  }
+
+  try {
+    const messages = threadId === 'yran-brain-chat'
+      ? ["(Ingen tidigare konversation – detta är en fristående fråga till Yran Brain)"]
+      : [];
+
+    const chatPrompt = `\nTidigare kontext:\n${messages.join('\n\n')}\n\nSvara enligt denna instruktion:\n${prompt}`;
+
+    const payload = {
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt || 'Du är en assistent specialiserad på Storsjöyran.' },
+        { role: 'user', content: chatPrompt }
+      ],
+      temperature: 0.7
+    };
+
+    const completion = await openai.chat.completions.create(payload);
+    const reply = completion.choices?.[0]?.message?.content || '';
+
+    gptPayloadHistory.unshift({ ...payload, createdAt: new Date().toISOString() });
+    gptPayloadHistory.splice(10);
+
+    res.json({ reply });
+  } catch (err) {
+    console.error("❌ GPT-svar misslyckades:", err.message);
+    res.status(500).json({ message: 'GPT-fel', error: err.message });
+  }
+});
+
 app.post('/log-gpt-reply', async (req, res) => {
   try {
     const { title, tags } = req.body;
