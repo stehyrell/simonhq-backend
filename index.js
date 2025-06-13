@@ -166,6 +166,18 @@ app.get('/drive/status', (req, res) => {
   });
 });
 
+app.post('/drive/fetch-remote', async (req, res) => {
+  try {
+    console.log('🔄 Fetching and summarizing remote Drive files...');
+    const files = await fetchDriveFiles();
+    const summaries = await summarizeFilesToCache(files);
+    res.json({ message: '✅ Filer hämtade och sammanfattade', summaries });
+  } catch (err) {
+    console.error('❌ Drive fetch/summarize error:', err.message);
+    res.status(500).json({ error: 'Kunde inte hämta och sammanfatta filer från Drive' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`✅ Simon HQ backend lyssnar på port ${PORT}`);
 });
