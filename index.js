@@ -59,7 +59,7 @@ const fetchDriveFiles = async () => {
   const folderId = folderList.files[0].id;
   const { data: files } = await drive.files.list({
     q: `'${folderId}' in parents and trashed = false`,
-    fields: 'files(id, name, mimeType, createdTime)'
+    fields: 'files(id, name, mimeType, createdTime, size)'
   });
 
   return files.files;
@@ -87,13 +87,22 @@ const summarizeFilesToCache = async (files) => {
         filename: file.name,
         type: file.mimeType,
         summary,
-        scannedAt: new Date().toISOString()
+        scannedAt: new Date().toISOString(),
+        size: file.size || null,
+        createdTime: file.createdTime || null
       };
     })
   );
 
+  const totalSize = summaries.reduce((sum, f) => sum + (parseInt(f.size || 0)), 0);
   const cachePath = path.join(__dirname, 'yran_brain.json');
-  fs.writeFileSync(cachePath, JSON.stringify({ documents: summaries, lastUpdated: new Date().toISOString() }, null, 2));
+  const cache = {
+    documents: summaries,
+    lastUpdated: new Date().toISOString(),
+    totalFiles: summaries.length,
+    totalSize
+  };
+  fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2));
   return summaries;
 };
 
@@ -116,6 +125,19 @@ app.get('/drive/context', (req, res) => {
 
   const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
   res.json(cache);
+});
+
+app.get('/drive/status', (req, res) => {
+  const cachePath = path.join(__dirname, 'yran_brain.json');
+  if (!fs.existsSync(cachePath)) {
+    return res.status(404).json({ error: 'Ingen cache hittades' });
+  }
+  const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+  res.json({
+    totalFiles: cache.totalFiles || cache.documents?.length || 0,
+    lastUpdated: cache.lastUpdated || null,
+    totalSizeBytes: cache.totalSize || null
+  });
 });
 
 app.listen(PORT, () => {
