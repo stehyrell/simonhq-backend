@@ -9,6 +9,7 @@ const { Client } = require('@notionhq/client');
 const mammoth = require('mammoth');
 const pdfParse = require('pdf-parse');
 const { GoogleAuth } = require('google-auth-library');
+const cron = require('node-cron');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,6 +29,23 @@ auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 const gmail = google.gmail({ version: 'v1', auth });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
+
+const logToNotion = async ({ title, källa, taggar = [], datum = null }) => {
+  try {
+    const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
+    await notion.pages.create({
+      parent: { database_id: dbId },
+      properties: {
+        Name: { title: [{ text: { content: title } }] },
+        Källa: { select: { name: källa } },
+        Tagg: { multi_select: taggar.map(t => ({ name: t })) },
+        datum: { date: { start: datum || new Date().toISOString() } }
+      }
+    });
+  } catch (err) {
+    console.error('❌ Kunde inte logga till Notion:', err.message);
+  }
+};
 
 const fetchDriveFiles = async () => {
   let credentials;
@@ -66,6 +84,7 @@ const fetchDriveFiles = async () => {
 };
 
 const summarizeFilesToCache = async (files) => {
+  const now = new Date();
   const summaries = await Promise.all(
     files.map(async (file) => {
       const completion = await openai.chat.completions.create({
@@ -83,11 +102,19 @@ const summarizeFilesToCache = async (files) => {
       });
 
       const summary = completion.choices?.[0]?.message?.content || '(Sammanfattning misslyckades)';
+
+      await logToNotion({
+        title: `Sammanfattning: ${file.name}`,
+        källa: 'drive',
+        taggar: ['Drive', 'Sammanfattning'],
+        datum: file.createdTime
+      });
+
       return {
         filename: file.name,
         type: file.mimeType,
         summary,
-        scannedAt: new Date().toISOString(),
+        scannedAt: now.toISOString(),
         size: file.size || null,
         createdTime: file.createdTime || null
       };
@@ -100,31 +127,28 @@ const summarizeFilesToCache = async (files) => {
     documents: summaries,
     lastUpdated: new Date().toISOString(),
     totalFiles: summaries.length,
-    totalSize
+    totalSize,
+    recentActivity: {
+      scannedToday: summaries.filter(f => f.scannedAt?.startsWith(new Date().toISOString().split('T')[0])).length,
+      gptResponsesToday: gptPayloadHistory.filter(p => p.createdAt?.startsWith(new Date().toISOString().split('T')[0])).length
+    }
   };
   fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2));
   return summaries;
 };
 
-app.post('/drive/fetch-remote', async (req, res) => {
+app.post('/log-gpt-reply', async (req, res) => {
   try {
-    const files = await fetchDriveFiles();
-    const result = await summarizeFilesToCache(files);
-    res.json({ documents: result });
+    const { title, tags } = req.body;
+    await logToNotion({
+      title: title || 'Svarsutkast via mailmodul',
+      källa: 'email',
+      taggar: tags || ['Mail', 'Automatiserat']
+    });
+    res.json({ status: 'logged' });
   } catch (err) {
-    console.error('❌ Google Drive API-fel:', err);
-    res.status(500).json({ error: 'Kunde inte hämta och sammanfatta filer från Drive' });
+    res.status(500).json({ error: 'Kunde inte logga GPT-svar' });
   }
-});
-
-app.get('/drive/context', (req, res) => {
-  const cachePath = path.join(__dirname, 'yran_brain.json');
-  if (!fs.existsSync(cachePath)) {
-    return res.status(404).json({ error: 'Ingen cache hittades' });
-  }
-
-  const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-  res.json(cache);
 });
 
 app.get('/drive/status', (req, res) => {
@@ -136,32 +160,8 @@ app.get('/drive/status', (req, res) => {
   res.json({
     totalFiles: cache.totalFiles || cache.documents?.length || 0,
     lastUpdated: cache.lastUpdated || null,
-    totalSizeBytes: cache.totalSize || null
+    totalSizeBytes: cache.totalSize || null,
+    gptResponsesToday: cache.recentActivity?.gptResponsesToday || 0,
+    scannedToday: cache.recentActivity?.scannedToday || 0
   });
-});
-
-app.get('/notion/logs', async (req, res) => {
-  try {
-    const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
-    const pages = await notion.databases.query({
-      database_id: dbId,
-      sorts: [{ property: 'datum', direction: 'descending' }]
-    });
-
-    const logs = pages.results.map((page) => ({
-      title: page.properties.Name?.title?.[0]?.plain_text || '(utan titel)',
-      källa: page.properties.Källa?.select?.name || null,
-      taggar: page.properties.Tagg?.multi_select?.map((t) => t.name) || [],
-      datum: page.properties.datum?.date?.start || null
-    }));
-
-    res.json({ logs });
-  } catch (err) {
-    console.error('❌ Notion API-fel:', err);
-    res.status(500).json({ error: 'Kunde inte hämta Notion-loggar' });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`✅ Server live på port ${PORT}`);
 });
