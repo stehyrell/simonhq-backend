@@ -33,8 +33,8 @@ const fetchDriveFiles = async () => {
   let credentials;
   try {
     credentials = JSON.parse(
-  Buffer.from(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64, 'base64').toString('utf8')
-);
+      Buffer.from(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64, 'base64').toString('utf8')
+    );
   } catch (e) {
     throw new Error('GOOGLE_APPLICATION_CREDENTIALS_JSON är ogiltig eller saknas');
   }
@@ -106,6 +106,16 @@ app.post('/drive/fetch-remote', async (req, res) => {
     console.error('❌ Google Drive API-fel:', err);
     res.status(500).json({ error: 'Kunde inte hämta och sammanfatta filer från Drive' });
   }
+});
+
+app.get('/drive/context', (req, res) => {
+  const cachePath = path.join(__dirname, 'yran_brain.json');
+  if (!fs.existsSync(cachePath)) {
+    return res.status(404).json({ error: 'Ingen cache hittades' });
+  }
+
+  const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+  res.json(cache);
 });
 
 app.listen(PORT, () => {
