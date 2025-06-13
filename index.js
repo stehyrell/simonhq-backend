@@ -166,6 +166,45 @@ app.get('/drive/status', (req, res) => {
   });
 });
 
+app.get('/drive/context', (req, res) => {
+  const cachePath = path.join(__dirname, 'yran_brain.json');
+  if (!fs.existsSync(cachePath)) {
+    return res.status(404).json({ error: 'Ingen cache hittades' });
+  }
+  const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+  res.json(cache.documents || []);
+});
+
+app.get('/notion/logs', async (req, res) => {
+  try {
+    const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
+    const source = req.query.source;
+
+    const filter = source
+      ? { property: 'Källa', select: { equals: source } }
+      : undefined;
+
+    const result = await notion.databases.query({
+      database_id: dbId,
+      filter,
+      sorts: [{ property: 'datum', direction: 'descending' }]
+    });
+
+    const logs = result.results.map((page) => ({
+      id: page.id,
+      title: page.properties.Name?.title?.[0]?.text?.content || 'Okänd',
+      källa: page.properties.Källa?.select?.name || 'Okänd',
+      taggar: page.properties.Tagg?.multi_select?.map(t => t.name),
+      datum: page.properties.datum?.date?.start || null
+    }));
+
+    res.json(logs);
+  } catch (err) {
+    console.error('❌ Kunde inte hämta loggar från Notion:', err.message);
+    res.status(500).json({ error: 'Kunde inte hämta loggar' });
+  }
+});
+
 app.post('/drive/fetch-remote', async (req, res) => {
   try {
     console.log('🔄 Fetching and summarizing remote Drive files...');
