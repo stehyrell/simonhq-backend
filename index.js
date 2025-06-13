@@ -30,9 +30,20 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
 const fetchDriveFiles = async () => {
+  let credentials;
+  try {
+    credentials = JSON.parse(
+  Buffer.from(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64, 'base64').toString('utf8')
+);
+  } catch (e) {
+    throw new Error('GOOGLE_APPLICATION_CREDENTIALS_JSON är ogiltig eller saknas');
+  }
+
   const auth = new GoogleAuth({
+    credentials,
     scopes: ['https://www.googleapis.com/auth/drive.readonly']
   });
+
   const drive = google.drive({ version: 'v3', auth: await auth.getClient() });
 
   const folderName = 'SimonHQ_YranBrain';
