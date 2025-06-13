@@ -140,6 +140,28 @@ app.get('/drive/status', (req, res) => {
   });
 });
 
+app.get('/notion/logs', async (req, res) => {
+  try {
+    const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
+    const pages = await notion.databases.query({
+      database_id: dbId,
+      sorts: [{ property: 'datum', direction: 'descending' }]
+    });
+
+    const logs = pages.results.map((page) => ({
+      title: page.properties.Name?.title?.[0]?.plain_text || '(utan titel)',
+      källa: page.properties.Källa?.select?.name || null,
+      taggar: page.properties.Tagg?.multi_select?.map((t) => t.name) || [],
+      datum: page.properties.datum?.date?.start || null
+    }));
+
+    res.json({ logs });
+  } catch (err) {
+    console.error('❌ Notion API-fel:', err);
+    res.status(500).json({ error: 'Kunde inte hämta Notion-loggar' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`✅ Server live på port ${PORT}`);
 });
