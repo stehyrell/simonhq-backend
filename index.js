@@ -85,6 +85,7 @@ const fetchDriveFiles = async () => {
 
 const summarizeFilesToCache = async (files) => {
   const now = new Date();
+  console.log('🧠 Startar sammanfattning av filer...');
   const summaries = await Promise.all(
     files.map(async (file) => {
       const completion = await openai.chat.completions.create({
@@ -122,7 +123,7 @@ const summarizeFilesToCache = async (files) => {
   );
 
   const totalSize = summaries.reduce((sum, f) => sum + (parseInt(f.size || 0)), 0);
-  const cachePath = path.join(__dirname, 'yran_brain.json');
+  const cachePath = path.resolve('./yran_brain.json');
   const cache = {
     documents: summaries,
     lastUpdated: new Date().toISOString(),
@@ -133,130 +134,44 @@ const summarizeFilesToCache = async (files) => {
       gptResponsesToday: gptPayloadHistory.filter(p => p.createdAt?.startsWith(new Date().toISOString().split('T')[0])).length
     }
   };
+
+  console.log('📝 Skriver yran_brain.json...');
   fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2));
+  console.log('✅ yran_brain.json sparad:', cachePath);
   return summaries;
 };
 
-app.post('/email/reply', async (req, res) => {
-  let { threadId, prompt, systemPrompt } = req.body;
-
-  if (!prompt && req.body.instruction) {
-    prompt = req.body.instruction;
-  }
-
-  if (!threadId || !prompt) {
-    return res.status(400).json({ error: "threadId och prompt krävs" });
-  }
-
+app.post('/yran/ask', async (req, res) => {
   try {
-    const messages = threadId === 'yran-brain-chat'
-      ? ["(Ingen tidigare konversation – detta är en fristående fråga till Yran Brain)"]
-      : [];
+    const { prompt } = req.body;
+    const contextPath = path.resolve('./yran_brain.json');
+    const contextData = fs.existsSync(contextPath) ? JSON.parse(fs.readFileSync(contextPath, 'utf8')) : null;
+    const systemPrompt = contextData ? `Här är relevant information från Storsjöyran:
 
-    const chatPrompt = `\nTidigare kontext:\n${messages.join('\n\n')}\n\nSvara enligt denna instruktion:\n${prompt}`;
+${contextData.documents.map(doc => `📄 ${doc.filename}\n${doc.summary}`).join('\n\n')}` : '';
 
-    const payload = {
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
-        { role: 'system', content: systemPrompt || 'Du är en assistent specialiserad på Storsjöyran.' },
-        { role: 'user', content: chatPrompt }
-      ],
-      temperature: 0.7
-    };
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ]
+    });
 
-    const completion = await openai.chat.completions.create(payload);
-    const reply = completion.choices?.[0]?.message?.content || '';
+    const reply = completion.choices?.[0]?.message?.content || '(Inget svar genererat)';
 
-    gptPayloadHistory.unshift({ ...payload, createdAt: new Date().toISOString() });
-    gptPayloadHistory.splice(10);
+    gptPayloadHistory.push({ prompt, reply, createdAt: new Date().toISOString() });
+
+    await logToNotion({
+      title: `Svar från Yran Brain`,
+      källa: 'yranbrain',
+      taggar: ['Svar'],
+      datum: new Date().toISOString()
+    });
 
     res.json({ reply });
   } catch (err) {
-    console.error("❌ GPT-svar misslyckades:", err.message);
-    res.status(500).json({ message: 'GPT-fel', error: err.message });
+    console.error('❌ Yran Brain-fel:', err);
+    res.status(500).json({ error: 'Yran Brain kunde inte generera ett svar.' });
   }
-});
-
-app.post('/log-gpt-reply', async (req, res) => {
-  try {
-    const { title, tags } = req.body;
-    await logToNotion({
-      title: title || 'Svarsutkast via mailmodul',
-      källa: 'email',
-      taggar: tags || ['Mail', 'Automatiserat']
-    });
-    res.json({ status: 'logged' });
-  } catch (err) {
-    res.status(500).json({ error: 'Kunde inte logga GPT-svar' });
-  }
-});
-
-app.get('/drive/status', (req, res) => {
-  const cachePath = path.join(__dirname, 'yran_brain.json');
-  if (!fs.existsSync(cachePath)) {
-    return res.status(404).json({ error: 'Ingen cache hittades' });
-  }
-  const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-  res.json({
-    totalFiles: cache.totalFiles || cache.documents?.length || 0,
-    lastUpdated: cache.lastUpdated || null,
-    totalSizeBytes: cache.totalSize || null,
-    gptResponsesToday: cache.recentActivity?.gptResponsesToday || 0,
-    scannedToday: cache.recentActivity?.scannedToday || 0
-  });
-});
-
-app.get('/drive/context', (req, res) => {
-  const cachePath = path.join(__dirname, 'yran_brain.json');
-  if (!fs.existsSync(cachePath)) {
-    return res.status(404).json({ error: 'Ingen cache hittades' });
-  }
-  const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-  res.json(cache.documents || []);
-});
-
-app.get('/notion/logs', async (req, res) => {
-  try {
-    const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
-    const source = req.query.source;
-
-    const filter = source
-      ? { property: 'Källa', select: { equals: source } }
-      : undefined;
-
-    const result = await notion.databases.query({
-      database_id: dbId,
-      filter,
-      sorts: [{ property: 'datum', direction: 'descending' }]
-    });
-
-    const logs = result.results.map((page) => ({
-      id: page.id,
-      title: page.properties.Name?.title?.[0]?.text?.content || 'Okänd',
-      källa: page.properties.Källa?.select?.name || 'Okänd',
-      taggar: page.properties.Tagg?.multi_select?.map(t => t.name),
-      datum: page.properties.datum?.date?.start || null
-    }));
-
-    res.json(logs);
-  } catch (err) {
-    console.error('❌ Kunde inte hämta loggar från Notion:', err.message);
-    res.status(500).json({ error: 'Kunde inte hämta loggar' });
-  }
-});
-
-app.post('/drive/fetch-remote', async (req, res) => {
-  try {
-    console.log('🔄 Fetching and summarizing remote Drive files...');
-    const files = await fetchDriveFiles();
-    const summaries = await summarizeFilesToCache(files);
-    res.json({ message: '✅ Filer hämtade och sammanfattade', summaries });
-  } catch (err) {
-    console.error('❌ Drive fetch/summarize error:', err.message);
-    res.status(500).json({ error: 'Kunde inte hämta och sammanfatta filer från Drive' });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`✅ Simon HQ backend lyssnar på port ${PORT}`);
 });
