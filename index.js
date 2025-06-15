@@ -80,24 +80,55 @@ const fetchDriveFiles = async () => {
     fields: 'files(id, name, mimeType, createdTime, size)'
   });
 
-  return files.files;
+  return files.files.map(f => ({ ...f, folderId }));
+};
+
+const downloadAndExtractContent = async (file, auth) => {
+  const drive = google.drive({ version: 'v3', auth });
+  const { data: stream } = await drive.files.get({
+    fileId: file.id,
+    alt: 'media',
+    responseType: 'stream'
+  });
+
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  const buffer = Buffer.concat(chunks);
+
+  if (file.mimeType === 'application/pdf') {
+    const parsed = await pdfParse(buffer);
+    return parsed.text;
+  } else if (file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value;
+  } else {
+    return '';
+  }
 };
 
 const summarizeFilesToCache = async (files) => {
   const now = new Date();
   console.log('🧠 Startar sammanfattning av filer...');
+  const credentials = JSON.parse(
+    Buffer.from(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64, 'base64').toString('utf8')
+  );
+  const auth = new GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/drive.readonly'] });
+  const client = await auth.getClient();
+
   const summaries = await Promise.all(
     files.map(async (file) => {
+      let fileText = await downloadAndExtractContent(file, client);
+
       const completion = await openai.chat.completions.create({
         model: 'gpt-4o',
         messages: [
           {
             role: 'system',
-            content: 'Sammanfatta innehållet kortfattat baserat på filmetadata. Om innehåll saknas, använd metadata.'
+            content: 'Sammanfatta innehållet i texten kortfattat. Om texten är tom, använd metadata.'
           },
           {
             role: 'user',
-            content: `Filnamn: ${file.name}\nTyp: ${file.mimeType}\nSkapad: ${file.createdTime}`
+            content: fileText || `Filnamn: ${file.name}\nTyp: ${file.mimeType}\nSkapad: ${file.createdTime}`
           }
         ]
       });
