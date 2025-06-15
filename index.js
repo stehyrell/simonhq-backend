@@ -206,3 +206,8 @@ ${contextData.documents.map(doc => `📄 ${doc.filename}\n${doc.summary}`).join(
     res.status(500).json({ error: 'Yran Brain kunde inte generera ett svar.' });
   }
 });
+
+// 🔁 Håll servern igång
+app.listen(PORT, () => {
+  console.log(`🚀 Servern körs på port ${PORT}`);
+});
