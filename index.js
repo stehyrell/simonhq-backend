@@ -8,10 +8,9 @@ const { OpenAI } = require('openai');
 const { Client } = require('@notionhq/client');
 const mammoth = require('mammoth');
 const pdfParse = require('pdf-parse');
-const { GoogleAuth } = require('google-auth-library');
-const cron = require('node-cron');
 const { fetchDriveFiles } = require('./fetchDriveFiles');
 const { summarizeFilesToCache } = require('./summarizeFilesToCache');
+const { updateProgress, getProgress } = require('./driveProgress');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -35,7 +34,7 @@ const notion = new Client({ auth: process.env.NOTION_API_KEY });
 // Health check
 app.get('/', (req, res) => res.send('✅ Simon HQ backend is live.'));
 
-// /drive/status
+// Drive-status
 app.get('/drive/status', async (req, res) => {
   try {
     const cachePath = path.resolve('./yran_brain.json');
@@ -48,7 +47,7 @@ app.get('/drive/status', async (req, res) => {
   }
 });
 
-// /drive/context
+// Drive-kontext
 app.get('/drive/context', async (req, res) => {
   try {
     const contextPath = path.resolve('./yran_brain.json');
@@ -61,7 +60,31 @@ app.get('/drive/context', async (req, res) => {
   }
 });
 
-// /notion/logs
+// Drive-progress
+app.get('/drive/progress', async (req, res) => {
+  try {
+    const progress = getProgress();
+    if (!progress) return res.status(404).json({ error: 'Ingen progress-data tillgänglig.' });
+    res.json(progress);
+  } catch (err) {
+    console.error('❌ Fel i /drive/progress:', err);
+    res.status(500).json({ error: 'Kunde inte läsa progress-data.' });
+  }
+});
+
+// Fetch och sammanfatta dokument från Drive
+app.post('/drive/fetch-remote', async (req, res) => {
+  try {
+    const files = await fetchDriveFiles();
+    const summaries = await summarizeFilesToCache(files);
+    res.json({ success: true, totalFiles: summaries.length });
+  } catch (err) {
+    console.error('❌ Fel i /drive/fetch-remote:', err);
+    res.status(500).json({ error: 'Kunde inte hämta och sammanfatta dokument.' });
+  }
+});
+
+// Notion-loggar
 app.get('/notion/logs', async (req, res) => {
   try {
     const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
@@ -82,7 +105,7 @@ app.get('/notion/logs', async (req, res) => {
   }
 });
 
-// /log-gpt-reply
+// Logga GPT-svar
 app.post('/log-gpt-reply', async (req, res) => {
   try {
     const { prompt, reply } = req.body;
@@ -94,25 +117,15 @@ app.post('/log-gpt-reply', async (req, res) => {
   }
 });
 
-// /drive/fetch-remote (triggera ny scanning manuellt)
-app.post('/drive/fetch-remote', async (req, res) => {
-  try {
-    const files = await fetchDriveFiles();
-    const summaries = await summarizeFilesToCache(files);
-    res.json({ success: true, totalFiles: summaries.length });
-  } catch (err) {
-    console.error('❌ Fel i /drive/fetch-remote:', err);
-    res.status(500).json({ error: 'Kunde inte hämta och sammanfatta dokument.' });
-  }
-});
-
-// /yran/ask
+// Yran Brain-fråga
 app.post('/yran/ask', async (req, res) => {
   try {
     const { prompt } = req.body;
     const contextPath = path.resolve('./yran_brain.json');
     const contextData = fs.existsSync(contextPath) ? JSON.parse(fs.readFileSync(contextPath, 'utf8')) : null;
-    const systemPrompt = contextData ? `Här är relevant information från Storsjöyran:\n\n${contextData.documents.map(doc => `📄 ${doc.filename}\n${doc.summary}`).join('\n\n')}` : '';
+    const systemPrompt = contextData
+      ? `Här är relevant information från Storsjöyran:\n\n${contextData.documents.map(doc => `📄 ${doc.filename}\n${doc.summary}`).join('\n\n')}`
+      : '';
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -123,7 +136,6 @@ app.post('/yran/ask', async (req, res) => {
     });
 
     const reply = completion.choices?.[0]?.message?.content || '(Inget svar genererat)';
-
     gptPayloadHistory.push({ prompt, reply, createdAt: new Date().toISOString() });
 
     await notion.pages.create({
@@ -143,7 +155,7 @@ app.post('/yran/ask', async (req, res) => {
   }
 });
 
-// 🔁 Server start
+// Starta server
 app.listen(PORT, () => {
   console.log(`🚀 Servern körs på port ${PORT}`);
 });
