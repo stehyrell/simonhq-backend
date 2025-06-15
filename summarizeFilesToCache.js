@@ -1,75 +1,67 @@
-
 const fs = require('fs');
 const path = require('path');
-const { google } = require('googleapis');
 const mammoth = require('mammoth');
 const pdfParse = require('pdf-parse');
-const { updateProgress } = require('./driveProgress');
+
+function getFileExtension(filename) {
+  return filename.split('.').pop().toLowerCase();
+}
 
 async function summarizeFilesToCache(files) {
-  const auth = new google.auth.OAuth2(
-    process.env.GMAIL_CLIENT_ID,
-    process.env.GMAIL_CLIENT_SECRET
-  );
-  auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+  if (!Array.isArray(files) || files.length === 0) {
+    console.warn('⚠️ Inga filer att sammanfatta.');
+    return [];
+  }
 
-  const drive = google.drive({ version: 'v3', auth });
-  const cachePath = path.resolve('./yran_brain.json');
-  const existing = fs.existsSync(cachePath) ? JSON.parse(fs.readFileSync(cachePath, 'utf8')) : { documents: [] };
-  const cachedMap = new Map(existing.documents.map(doc => [doc.id, doc.modifiedTime]));
+  console.log(`🧠 Startar sammanfattning av ${files.length} filer...`);
 
-  const documents = [...existing.documents];
+  const summaries = await Promise.all(
+    files.map(async (file) => {
+      const { id, name, mimeType, modifiedTime, size } = file;
+      const extension = getFileExtension(name);
+      let summary = '';
 
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-
-    if (cachedMap.get(file.id) === file.modifiedTime) continue;
-
-    try {
-      const result = await drive.files.get(
-        { fileId: file.id, alt: 'media' },
-        { responseType: 'arraybuffer' }
-      );
-
-      let text = '';
-      if (file.mimeType.includes('wordprocessingml.document')) {
-        const docResult = await mammoth.extractRawText({ buffer: Buffer.from(result.data) });
-        text = docResult.value;
-      } else if (file.mimeType === 'application/pdf') {
-        const pdfData = await pdfParse(Buffer.from(result.data));
-        text = pdfData.text;
+      try {
+        if (extension === 'docx') {
+          const buffer = fs.readFileSync(path.resolve('drive_files', `${id}.docx`));
+          const result = await mammoth.extractRawText({ buffer });
+          summary = result.value.trim().slice(0, 1000);
+        } else if (extension === 'pdf') {
+          const buffer = fs.readFileSync(path.resolve('drive_files', `${id}.pdf`));
+          const result = await pdfParse(buffer);
+          summary = result.text.trim().slice(0, 1000);
+        } else {
+          summary = '[Ej stödd filtyp]';
+        }
+      } catch (err) {
+        console.error(`⚠️ Kunde inte sammanfatta ${name}:`, err.message);
+        summary = '[Fel vid sammanfattning]';
       }
 
-      const summary = text.slice(0, 1000);
-      documents.push({
-        id: file.id,
-        filename: file.name,
-        modifiedTime: file.modifiedTime,
-        summary: summary.trim()
-      });
+      return {
+        id,
+        filename: name,
+        summary,
+        modifiedTime,
+        size: parseInt(size) || 0,
+      };
+    })
+  );
 
-      updateProgress({
-        total: files.length,
-        completed: documents.length,
-        lastFile: file.name,
-        downloadedBytes: result.data.byteLength,
-        currentPage: Math.floor(i / 1000) + 1
-      });
-
-    } catch (err) {
-      console.error(`❌ Kunde inte sammanfatta fil: ${file.name}`, err);
-    }
-  }
+  const totalSize = summaries.reduce((sum, f) => sum + (f.size || 0), 0);
 
   const cacheData = {
     lastUpdated: new Date().toISOString(),
-    totalFiles: documents.length,
-    totalSize: documents.reduce((acc, d) => acc + d.summary.length, 0),
-    documents
+    totalFiles: summaries.length,
+    totalSize,
+    totalSizeBytes: totalSize,
+    documents: summaries,
   };
 
-  fs.writeFileSync(cachePath, JSON.stringify(cacheData, null, 2), 'utf8');
-  return documents;
+  fs.writeFileSync(path.resolve('./yran_brain.json'), JSON.stringify(cacheData, null, 2));
+  console.log(`✅ Sammanfattning klar: ${summaries.length} filer sparade till cache.`);
+
+  return summaries;
 }
 
 module.exports = { summarizeFilesToCache };
