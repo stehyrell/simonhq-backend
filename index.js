@@ -30,156 +30,87 @@ const gmail = google.gmail({ version: 'v1', auth });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
-const logToNotion = async ({ title, källa, taggar = [], datum = null }) => {
+// Health check
+app.get('/', (req, res) => res.send('✅ Simon HQ backend is live.'));
+
+// /drive/status
+app.get('/drive/status', async (req, res) => {
+  try {
+    const cachePath = path.resolve('./yran_brain.json');
+    const cache = fs.existsSync(cachePath) ? JSON.parse(fs.readFileSync(cachePath, 'utf8')) : null;
+    if (!cache) return res.status(404).json({ error: 'Ingen cache hittades.' });
+    res.json({ lastUpdated: cache.lastUpdated, totalFiles: cache.totalFiles, totalSize: cache.totalSize });
+  } catch (err) {
+    console.error('❌ Fel i /drive/status:', err);
+    res.status(500).json({ error: 'Kunde inte läsa cache-status.' });
+  }
+});
+
+// /drive/context
+app.get('/drive/context', async (req, res) => {
+  try {
+    const contextPath = path.resolve('./yran_brain.json');
+    const contextData = fs.existsSync(contextPath) ? JSON.parse(fs.readFileSync(contextPath, 'utf8')) : null;
+    if (!contextData) return res.status(404).json({ error: 'Ingen sammanfattningscache hittades.' });
+    res.json(contextData);
+  } catch (err) {
+    console.error('❌ Fel i /drive/context:', err);
+    res.status(500).json({ error: 'Misslyckades läsa dokumentkontext.' });
+  }
+});
+
+// /notion/logs
+app.get('/notion/logs', async (req, res) => {
   try {
     const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
-    await notion.pages.create({
-      parent: { database_id: dbId },
-      properties: {
-        Name: { title: [{ text: { content: title } }] },
-        Källa: { select: { name: källa } },
-        Tagg: { multi_select: taggar.map(t => ({ name: t })) },
-        datum: { date: { start: datum || new Date().toISOString() } }
-      }
+    const response = await notion.databases.query({
+      database_id: dbId,
+      sorts: [{ timestamp: 'created_time', direction: 'descending' }],
+      page_size: 15
     });
+    res.json(response.results.map(r => ({
+      name: r.properties?.Name?.title?.[0]?.text?.content || '(Namnlös)',
+      källa: r.properties?.Källa?.select?.name || '',
+      taggar: r.properties?.Tagg?.multi_select?.map(t => t.name) || [],
+      datum: r.properties?.datum?.date?.start || r.created_time
+    })));
   } catch (err) {
-    console.error('❌ Kunde inte logga till Notion:', err.message);
+    console.error('❌ Fel i /notion/logs:', err);
+    res.status(500).json({ error: 'Kunde inte hämta loggar från Notion.' });
   }
-};
+});
 
-const fetchDriveFiles = async () => {
-  let credentials;
+// /log-gpt-reply
+app.post('/log-gpt-reply', async (req, res) => {
   try {
-    credentials = JSON.parse(
-      Buffer.from(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64, 'base64').toString('utf8')
-    );
-  } catch (e) {
-    throw new Error('GOOGLE_APPLICATION_CREDENTIALS_JSON är ogiltig eller saknas');
+    const { prompt, reply } = req.body;
+    gptPayloadHistory.push({ prompt, reply, createdAt: new Date().toISOString() });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Fel vid loggning av GPT-svar:', err);
+    res.status(500).json({ error: 'Misslyckades logga GPT-svar.' });
   }
+});
 
-  const auth = new GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/drive.readonly']
-  });
-
-  const drive = google.drive({ version: 'v3', auth: await auth.getClient() });
-
-  const folderName = 'SimonHQ_YranBrain';
-  const { data: folderList } = await drive.files.list({
-    q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed = false`,
-    fields: 'files(id, name)'
-  });
-
-  if (!folderList.files.length) {
-    throw new Error(`Drive-mapp '${folderName}' hittades inte.`);
+// /drive/fetch-remote (triggera ny scanning manuellt)
+app.post('/drive/fetch-remote', async (req, res) => {
+  try {
+    const files = await fetchDriveFiles();
+    const summaries = await summarizeFilesToCache(files);
+    res.json({ success: true, totalFiles: summaries.length });
+  } catch (err) {
+    console.error('❌ Fel i /drive/fetch-remote:', err);
+    res.status(500).json({ error: 'Kunde inte hämta och sammanfatta dokument.' });
   }
+});
 
-  const folderId = folderList.files[0].id;
-  const { data: files } = await drive.files.list({
-    q: `'${folderId}' in parents and trashed = false`,
-    fields: 'files(id, name, mimeType, createdTime, size)'
-  });
-
-  return files.files.map(f => ({ ...f, folderId }));
-};
-
-const downloadAndExtractContent = async (file, auth) => {
-  const drive = google.drive({ version: 'v3', auth });
-  const { data: stream } = await drive.files.get({
-    fileId: file.id,
-    alt: 'media',
-    responseType: 'stream'
-  });
-
-  const chunks = [];
-  for await (const chunk of stream) chunks.push(chunk);
-  const buffer = Buffer.concat(chunks);
-
-  if (file.mimeType === 'application/pdf') {
-    const parsed = await pdfParse(buffer);
-    return parsed.text;
-  } else if (file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-    const result = await mammoth.extractRawText({ buffer });
-    return result.value;
-  } else {
-    return '';
-  }
-};
-
-const summarizeFilesToCache = async (files) => {
-  const now = new Date();
-  console.log('🧠 Startar sammanfattning av filer...');
-  const credentials = JSON.parse(
-    Buffer.from(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64, 'base64').toString('utf8')
-  );
-  const auth = new GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/drive.readonly'] });
-  const client = await auth.getClient();
-
-  const summaries = await Promise.all(
-    files.map(async (file) => {
-      let fileText = await downloadAndExtractContent(file, client);
-
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o',
-        messages: [
-          {
-            role: 'system',
-            content: 'Sammanfatta innehållet i texten kortfattat. Om texten är tom, använd metadata.'
-          },
-          {
-            role: 'user',
-            content: fileText || `Filnamn: ${file.name}\nTyp: ${file.mimeType}\nSkapad: ${file.createdTime}`
-          }
-        ]
-      });
-
-      const summary = completion.choices?.[0]?.message?.content || '(Sammanfattning misslyckades)';
-
-      await logToNotion({
-        title: `Sammanfattning: ${file.name}`,
-        källa: 'drive',
-        taggar: ['Drive', 'Sammanfattning'],
-        datum: file.createdTime
-      });
-
-      return {
-        filename: file.name,
-        type: file.mimeType,
-        summary,
-        scannedAt: now.toISOString(),
-        size: file.size || null,
-        createdTime: file.createdTime || null
-      };
-    })
-  );
-
-  const totalSize = summaries.reduce((sum, f) => sum + (parseInt(f.size || 0)), 0);
-  const cachePath = path.resolve('./yran_brain.json');
-  const cache = {
-    documents: summaries,
-    lastUpdated: new Date().toISOString(),
-    totalFiles: summaries.length,
-    totalSize,
-    recentActivity: {
-      scannedToday: summaries.filter(f => f.scannedAt?.startsWith(new Date().toISOString().split('T')[0])).length,
-      gptResponsesToday: gptPayloadHistory.filter(p => p.createdAt?.startsWith(new Date().toISOString().split('T')[0])).length
-    }
-  };
-
-  console.log('📝 Skriver yran_brain.json...');
-  fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2));
-  console.log('✅ yran_brain.json sparad:', cachePath);
-  return summaries;
-};
-
+// /yran/ask
 app.post('/yran/ask', async (req, res) => {
   try {
     const { prompt } = req.body;
     const contextPath = path.resolve('./yran_brain.json');
     const contextData = fs.existsSync(contextPath) ? JSON.parse(fs.readFileSync(contextPath, 'utf8')) : null;
-    const systemPrompt = contextData ? `Här är relevant information från Storsjöyran:
-
-${contextData.documents.map(doc => `📄 ${doc.filename}\n${doc.summary}`).join('\n\n')}` : '';
+    const systemPrompt = contextData ? `Här är relevant information från Storsjöyran:\n\n${contextData.documents.map(doc => `📄 ${doc.filename}\n${doc.summary}`).join('\n\n')}` : '';
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -193,11 +124,14 @@ ${contextData.documents.map(doc => `📄 ${doc.filename}\n${doc.summary}`).join(
 
     gptPayloadHistory.push({ prompt, reply, createdAt: new Date().toISOString() });
 
-    await logToNotion({
-      title: `Svar från Yran Brain`,
-      källa: 'yranbrain',
-      taggar: ['Svar'],
-      datum: new Date().toISOString()
+    await notion.pages.create({
+      parent: { database_id: process.env.NOTION_YRAN_LOG_DB_ID },
+      properties: {
+        Name: { title: [{ text: { content: `Svar från Yran Brain` } }] },
+        Källa: { select: { name: 'yranbrain' } },
+        Tagg: { multi_select: [{ name: 'Svar' }] },
+        datum: { date: { start: new Date().toISOString() } }
+      }
     });
 
     res.json({ reply });
@@ -207,7 +141,7 @@ ${contextData.documents.map(doc => `📄 ${doc.filename}\n${doc.summary}`).join(
   }
 });
 
-// 🔁 Håll servern igång
+// 🔁 Server start
 app.listen(PORT, () => {
   console.log(`🚀 Servern körs på port ${PORT}`);
 });
