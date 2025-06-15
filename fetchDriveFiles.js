@@ -1,11 +1,12 @@
-
 const { google } = require('googleapis');
-const { GoogleAuth } = require('google-auth-library');
 
 async function fetchDriveFiles() {
-  const auth = new GoogleAuth({
-    scopes: ['https://www.googleapis.com/auth/drive.readonly']
-  });
+  const auth = new google.auth.OAuth2(
+    process.env.GMAIL_CLIENT_ID,
+    process.env.GMAIL_CLIENT_SECRET
+  );
+  auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+
   const drive = google.drive({ version: 'v3', auth });
 
   const res = await drive.files.list({
