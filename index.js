@@ -6,8 +6,6 @@ const path = require('path');
 const { google } = require('googleapis');
 const { OpenAI } = require('openai');
 const { Client } = require('@notionhq/client');
-const mammoth = require('mammoth');
-const pdfParse = require('pdf-parse');
 const { fetchDriveFiles } = require('./fetchDriveFiles');
 const { summarizeFilesToCache } = require('./summarizeFilesToCache');
 const { updateProgress, getProgress } = require('./driveProgress');
@@ -15,13 +13,7 @@ const { updateProgress, getProgress } = require('./driveProgress');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors({
-  origin: [
-    'https://preview--simon-hq-orchestra.lovable.app',
-    'https://simonhq.vercel.app',
-    'http://localhost:3000'
-  ]
-}));
+app.use(cors());
 app.use(express.json());
 
 const gptPayloadHistory = [];
@@ -31,10 +23,8 @@ const gmail = google.gmail({ version: 'v1', auth });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
-// Health check
 app.get('/', (req, res) => res.send('✅ Simon HQ backend is live.'));
 
-// Drive-status
 app.get('/drive/status', async (req, res) => {
   try {
     const cachePath = path.resolve('./yran_brain.json');
@@ -47,7 +37,6 @@ app.get('/drive/status', async (req, res) => {
   }
 });
 
-// Drive-kontext
 app.get('/drive/context', async (req, res) => {
   try {
     const contextPath = path.resolve('./yran_brain.json');
@@ -60,7 +49,6 @@ app.get('/drive/context', async (req, res) => {
   }
 });
 
-// Drive-progress
 app.get('/drive/progress', async (req, res) => {
   try {
     const progress = getProgress();
@@ -72,19 +60,24 @@ app.get('/drive/progress', async (req, res) => {
   }
 });
 
-// Fetch och sammanfatta dokument från Drive
-app.post('/drive/fetch-remote', async (req, res) => {
-  try {
-    const files = await fetchDriveFiles();
-    const summaries = await summarizeFilesToCache(files);
-    res.json({ success: true, totalFiles: summaries.length });
-  } catch (err) {
-    console.error('❌ Fel i /drive/fetch-remote:', err);
-    res.status(500).json({ error: 'Kunde inte hämta och sammanfatta dokument.' });
-  }
+app.post('/drive/start-indexing', async (req, res) => {
+  res.status(202).json({ status: 'Indexering startad' });
+
+  setTimeout(async () => {
+    try {
+      updateProgress({ status: 'Indexering pågår...', done: false, error: null });
+      const files = await fetchDriveFiles();
+      await summarizeFilesToCache(files);
+      updateProgress({ status: 'Indexering klar', done: true, error: null });
+      console.log('✅ Indexering slutförd.');
+    } catch (err) {
+      console.error('❌ Async indexering misslyckades:', err);
+      updateProgress({ status: 'Fel vid indexering', done: true, error: err.message });
+    }
+  }, 500);
 });
 
-// Notion-loggar
+
 app.get('/notion/logs', async (req, res) => {
   try {
     const dbId = process.env.NOTION_YRAN_LOG_DB_ID;
@@ -105,7 +98,6 @@ app.get('/notion/logs', async (req, res) => {
   }
 });
 
-// Logga GPT-svar
 app.post('/log-gpt-reply', async (req, res) => {
   try {
     const { prompt, reply } = req.body;
@@ -117,7 +109,6 @@ app.post('/log-gpt-reply', async (req, res) => {
   }
 });
 
-// Yran Brain-fråga
 app.post('/yran/ask', async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -155,7 +146,6 @@ app.post('/yran/ask', async (req, res) => {
   }
 });
 
-// Starta server
 app.listen(PORT, () => {
   console.log(`🚀 Servern körs på port ${PORT}`);
 });

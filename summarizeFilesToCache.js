@@ -14,10 +14,16 @@ async function summarizeFilesToCache(files) {
   auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 
   const drive = google.drive({ version: 'v3', auth });
-  const documents = [];
+  const cachePath = path.resolve('./yran_brain.json');
+  const existing = fs.existsSync(cachePath) ? JSON.parse(fs.readFileSync(cachePath, 'utf8')) : { documents: [] };
+  const cachedMap = new Map(existing.documents.map(doc => [doc.id, doc.modifiedTime]));
+
+  const documents = [...existing.documents];
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
+
+    if (cachedMap.get(file.id) === file.modifiedTime) continue;
 
     try {
       const result = await drive.files.get(
@@ -35,10 +41,10 @@ async function summarizeFilesToCache(files) {
       }
 
       const summary = text.slice(0, 1000);
-
       documents.push({
         id: file.id,
         filename: file.name,
+        modifiedTime: file.modifiedTime,
         summary: summary.trim()
       });
 
@@ -62,9 +68,7 @@ async function summarizeFilesToCache(files) {
     documents
   };
 
-  const cachePath = path.resolve('./yran_brain.json');
   fs.writeFileSync(cachePath, JSON.stringify(cacheData, null, 2), 'utf8');
-
   return documents;
 }
 
