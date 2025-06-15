@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 
-function updateProgress({ total, completed, lastFile, downloadedBytes }) {
+function updateProgress({ total, completed, lastFile, downloadedBytes, currentPage }) {
   const progressPath = path.resolve('./drive_progress.json');
   const previous = fs.existsSync(progressPath)
     ? JSON.parse(fs.readFileSync(progressPath, 'utf8'))
@@ -13,6 +13,7 @@ function updateProgress({ total, completed, lastFile, downloadedBytes }) {
     completed,
     lastFile,
     downloadedBytes,
+    currentPage,
     startedAt: previous.startedAt || new Date().toISOString()
   };
 

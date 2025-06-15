@@ -1,3 +1,4 @@
+
 const { google } = require('googleapis');
 
 async function fetchDriveFiles() {
@@ -9,13 +10,22 @@ async function fetchDriveFiles() {
 
   const drive = google.drive({ version: 'v3', auth });
 
-  const res = await drive.files.list({
-    q: "mimeType='application/pdf' or mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document'",
-    fields: 'files(id, name, mimeType, modifiedTime)',
-    pageSize: 10
-  });
+  const files = [];
+  let pageToken = null;
 
-  return res.data.files;
+  do {
+    const res = await drive.files.list({
+      q: "mimeType='application/pdf' or mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document'",
+      fields: 'nextPageToken, files(id, name, mimeType, modifiedTime)',
+      pageSize: 1000,
+      pageToken
+    });
+
+    files.push(...res.data.files);
+    pageToken = res.data.nextPageToken;
+  } while (pageToken);
+
+  return files;
 }
 
 module.exports = { fetchDriveFiles };

@@ -1,8 +1,10 @@
+
 const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
 const mammoth = require('mammoth');
 const pdfParse = require('pdf-parse');
+const { updateProgress } = require('./driveProgress');
 
 async function summarizeFilesToCache(files) {
   const auth = new google.auth.OAuth2(
@@ -12,10 +14,11 @@ async function summarizeFilesToCache(files) {
   auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 
   const drive = google.drive({ version: 'v3', auth });
-
   const documents = [];
 
-  for (const file of files) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+
     try {
       const result = await drive.files.get(
         { fileId: file.id, alt: 'media' },
@@ -23,7 +26,6 @@ async function summarizeFilesToCache(files) {
       );
 
       let text = '';
-
       if (file.mimeType.includes('wordprocessingml.document')) {
         const docResult = await mammoth.extractRawText({ buffer: Buffer.from(result.data) });
         text = docResult.value;
@@ -32,13 +34,22 @@ async function summarizeFilesToCache(files) {
         text = pdfData.text;
       }
 
-      const summary = text.slice(0, 1000); // ✂️ Enkel sammanfattning
+      const summary = text.slice(0, 1000);
 
       documents.push({
         id: file.id,
         filename: file.name,
         summary: summary.trim()
       });
+
+      updateProgress({
+        total: files.length,
+        completed: documents.length,
+        lastFile: file.name,
+        downloadedBytes: result.data.byteLength,
+        currentPage: Math.floor(i / 1000) + 1
+      });
+
     } catch (err) {
       console.error(`❌ Kunde inte sammanfatta fil: ${file.name}`, err);
     }
