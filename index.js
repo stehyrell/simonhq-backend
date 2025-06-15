@@ -10,6 +10,8 @@ const mammoth = require('mammoth');
 const pdfParse = require('pdf-parse');
 const { GoogleAuth } = require('google-auth-library');
 const cron = require('node-cron');
+const { fetchDriveFiles } = require('./fetchDriveFiles');
+const { summarizeFilesToCache } = require('./summarizeFilesToCache');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
