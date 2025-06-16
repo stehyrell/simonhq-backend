@@ -13,7 +13,14 @@ const { updateProgress, getProgress } = require('./driveProgress');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://preview--simon-hq-orchestra.lovable.app',
+    'https://simonhq.vercel.app',
+    'http://localhost:3000'
+  ]
+}));
+
 app.use(express.json());
 
 const gptPayloadHistory = [];
