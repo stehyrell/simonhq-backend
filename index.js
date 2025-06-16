@@ -28,14 +28,19 @@ app.get('/', (req, res) => res.send('✅ Simon HQ backend is live.'));
 app.get('/drive/status', async (req, res) => {
   try {
     const cachePath = path.resolve('./yran_brain.json');
-    const cache = fs.existsSync(cachePath) ? JSON.parse(fs.readFileSync(cachePath, 'utf8')) : null;
-    if (!cache) return res.status(404).json({ error: 'Ingen cache hittades.' });
-    const totalSizeBytes = cache.documents.reduce((sum, doc) => sum + (doc.size || 0), 0);
+
+    if (!fs.existsSync(cachePath)) {
+      return res.status(404).json({ error: 'Ingen cache hittades.' });
+    }
+
+    const rawData = fs.readFileSync(cachePath, 'utf8');
+    const cache = JSON.parse(rawData);
+
     res.json({
-      lastUpdated: cache.lastUpdated,
-      totalFiles: cache.totalFiles,
-      totalSize: cache.totalSize,
-      totalSizeBytes
+      lastUpdated: cache.lastUpdated || null,
+      totalFiles: cache.totalFiles || 0,
+      totalSize: cache.totalSize || 0,
+      totalSizeBytes: cache.totalSize || 0
     });
   } catch (err) {
     console.error('❌ Fel i /drive/status:', err);
@@ -46,24 +51,17 @@ app.get('/drive/status', async (req, res) => {
 app.get('/drive/context', async (req, res) => {
   try {
     const contextPath = path.resolve('./yran_brain.json');
-    const contextData = fs.existsSync(contextPath) ? JSON.parse(fs.readFileSync(contextPath, 'utf8')) : null;
-    if (!contextData) return res.status(404).json({ error: 'Ingen sammanfattningscache hittades.' });
+    if (!fs.existsSync(contextPath)) {
+      return res.status(404).json({ error: 'Ingen sammanfattningscache hittades.' });
+    }
+
+    const raw = fs.readFileSync(contextPath, 'utf8');
+    const contextData = JSON.parse(raw);
+
     res.json(contextData);
   } catch (err) {
     console.error('❌ Fel i /drive/context:', err);
     res.status(500).json({ error: 'Misslyckades läsa dokumentkontext.' });
-  }
-});
-
-app.get('/drive/files', async (req, res) => {
-  try {
-    const cachePath = path.resolve('./yran_brain.json');
-    const cache = fs.existsSync(cachePath) ? JSON.parse(fs.readFileSync(cachePath, 'utf8')) : null;
-    if (!cache) return res.status(404).json({ error: 'Ingen cache hittades.' });
-    res.json(cache.documents);
-  } catch (err) {
-    console.error('❌ Fel i /drive/files:', err);
-    res.status(500).json({ error: 'Misslyckades läsa dokumentlista.' });
   }
 });
 
@@ -103,12 +101,15 @@ app.get('/notion/logs', async (req, res) => {
       sorts: [{ timestamp: 'created_time', direction: 'descending' }],
       page_size: 15
     });
-    res.json(response.results.map(r => ({
+
+    const results = response.results.map(r => ({
       name: r.properties?.Name?.title?.[0]?.text?.content || '(Namnlös)',
       källa: r.properties?.Källa?.select?.name || '',
       taggar: r.properties?.Tagg?.multi_select?.map(t => t.name) || [],
       datum: r.properties?.datum?.date?.start || r.created_time
-    })));
+    }));
+
+    res.json(results);
   } catch (err) {
     console.error('❌ Fel i /notion/logs:', err);
     res.status(500).json({ error: 'Kunde inte hämta loggar från Notion.' });
@@ -131,6 +132,7 @@ app.post('/yran/ask', async (req, res) => {
     const { prompt } = req.body;
     const contextPath = path.resolve('./yran_brain.json');
     const contextData = fs.existsSync(contextPath) ? JSON.parse(fs.readFileSync(contextPath, 'utf8')) : null;
+
     const systemPrompt = contextData
       ? `Här är relevant information från Storsjöyran:\n\n${contextData.documents.map(doc => `📄 ${doc.filename}\n${doc.summary}`).join('\n\n')}`
       : '';
