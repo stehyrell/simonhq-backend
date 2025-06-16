@@ -83,6 +83,16 @@ app.get('/drive/progress', async (req, res) => {
   }
 });
 
+app.get('/drive/files', async (req, res) => {
+  try {
+    const files = await fetchDriveFiles();
+    res.json({ files });
+  } catch (err) {
+    console.error('❌ Fel i /drive/files:', err);
+    res.status(500).json({ error: 'Kunde inte hämta filer från Google Drive.' });
+  }
+});
+
 app.post('/drive/start-indexing', async (req, res) => {
   res.status(202).json({ status: 'Indexering startad' });
 
