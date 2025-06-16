@@ -30,7 +30,13 @@ app.get('/drive/status', async (req, res) => {
     const cachePath = path.resolve('./yran_brain.json');
     const cache = fs.existsSync(cachePath) ? JSON.parse(fs.readFileSync(cachePath, 'utf8')) : null;
     if (!cache) return res.status(404).json({ error: 'Ingen cache hittades.' });
-    res.json({ lastUpdated: cache.lastUpdated, totalFiles: cache.totalFiles, totalSize: cache.totalSize });
+    const totalSizeBytes = cache.documents.reduce((sum, doc) => sum + (doc.size || 0), 0);
+    res.json({
+      lastUpdated: cache.lastUpdated,
+      totalFiles: cache.totalFiles,
+      totalSize: cache.totalSize,
+      totalSizeBytes
+    });
   } catch (err) {
     console.error('❌ Fel i /drive/status:', err);
     res.status(500).json({ error: 'Kunde inte läsa cache-status.' });
@@ -46,6 +52,18 @@ app.get('/drive/context', async (req, res) => {
   } catch (err) {
     console.error('❌ Fel i /drive/context:', err);
     res.status(500).json({ error: 'Misslyckades läsa dokumentkontext.' });
+  }
+});
+
+app.get('/drive/files', async (req, res) => {
+  try {
+    const cachePath = path.resolve('./yran_brain.json');
+    const cache = fs.existsSync(cachePath) ? JSON.parse(fs.readFileSync(cachePath, 'utf8')) : null;
+    if (!cache) return res.status(404).json({ error: 'Ingen cache hittades.' });
+    res.json(cache.documents);
+  } catch (err) {
+    console.error('❌ Fel i /drive/files:', err);
+    res.status(500).json({ error: 'Misslyckades läsa dokumentlista.' });
   }
 });
 
@@ -76,7 +94,6 @@ app.post('/drive/start-indexing', async (req, res) => {
     }
   }, 500);
 });
-
 
 app.get('/notion/logs', async (req, res) => {
   try {

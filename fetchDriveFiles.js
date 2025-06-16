@@ -1,31 +1,30 @@
 const { google } = require('googleapis');
+const { GoogleAuth } = require('google-auth-library');
+
+const auth = new GoogleAuth({
+  scopes: ['https://www.googleapis.com/auth/drive.readonly']
+});
 
 async function fetchDriveFiles() {
-  try {
-    const auth = new google.auth.OAuth2(
-      process.env.GMAIL_CLIENT_ID,
-      process.env.GMAIL_CLIENT_SECRET
-    );
-    auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+  const client = await auth.getClient();
+  const drive = google.drive({ version: 'v3', auth: client });
 
-    const drive = google.drive({ version: 'v3', auth });
+  let files = [];
+  let pageToken = null;
 
-    const response = await drive.files.list({
-      // Tillfälligt inga filter – hämta ALLT som inte är i papperskorgen
-      q: "trashed = false",
-      fields: 'files(id, name, mimeType, modifiedTime, size)',
-      pageSize: 100,
+  do {
+    const res = await drive.files.list({
+      q: "mimeType='application/pdf' or mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document' or mimeType='application/vnd.google-apps.document'",
+      fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, size)',
+      pageSize: 1000,
+      pageToken
     });
 
-    const files = response.data.files || [];
-    console.log(`📥 Antal filer hämtade från Drive: ${files.length}`);
-    console.log('📄 Förhandsgranskning av filer:', files.slice(0, 5));
+    files.push(...res.data.files);
+    pageToken = res.data.nextPageToken;
+  } while (pageToken);
 
-    return files;
-  } catch (err) {
-    console.error('❌ Fel vid hämtning av Drive-filer:', err.message);
-    return [];
-  }
+  return files;
 }
 
 module.exports = { fetchDriveFiles };
